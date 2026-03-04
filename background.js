@@ -19,7 +19,7 @@ chrome.runtime.onInstalled.addListener(async (details) => {
   await loadWhitelist();
   createContextMenu();
   if (details.reason === 'install') {
-    chrome.tabs.create({ url: chrome.runtime.getURL('welcome.html') })
+    chrome.tabs.create({ url: chrome.runtime.getURL('welcome/index.html') })
       .catch(err => console.error('ウェルカムページを開けませんでした:', err));
   }
   if (details.reason === 'install' || details.reason === 'update') {
