@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Doug</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <div class="container">
+    <div class="popup-header">
+      <h1>Doug</h1>
+      <button id="openOptionsBtn" class="btn-settings" title="詳細設定を開く">⚙</button>
+    </div>
+
+    <div class="section current-site-section" id="currentSiteSection" style="display:none">
+      <label>現在のサイト</label>
+      <div class="current-site-row">
+        <span id="currentSiteHost" class="current-site-host">—</span>
+        <button id="toggleSiteBtn" class="btn-primary" style="display:none"></button>
+      </div>
+    </div>
+
+    <div id="capturePermSection" class="section" style="display:none">
+      <p class="field-hint" style="margin-bottom:8px">CDN経由の画像翻訳にスクリーンキャプチャ権限が必要です。</p>
+      <button id="grantCapturePermBtn" class="btn-primary">スクリーンキャプチャ権限を追加</button>
+    </div>
+
+    <div class="section">
+      <label for="targetLang">翻訳先言語:</label>
+      <select id="targetLang">
+        <option value="ja">日本語 (Japanese)</option>
+        <option value="ko">韓国語 (Korean)</option>
+        <option value="zh-CN">簡体字中国語 (Simplified Chinese)</option>
+        <option value="zh-TW">繁体字中国語 (Traditional Chinese)</option>
+        <option value="es">スペイン語 (Spanish)</option>
+        <option value="fr">フランス語 (French)</option>
+        <option value="de">ドイツ語 (German)</option>
+        <option value="pt">ポルトガル語 (Portuguese)</option>
+      </select>
+    </div>
+
+    <div class="actions">
+      <button id="clearCacheBtn" class="btn-secondary">キャッシュをクリア</button>
+    </div>
+
+    <div id="status" class="status"></div>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>

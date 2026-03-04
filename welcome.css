@@ -1,0 +1,97 @@
+/* popup.css の width: 300px を上書き */
+body {
+  width: auto;
+  max-width: 800px;
+  margin: 0 auto;
+  padding: 40px 24px;
+}
+h1 { font-size: 22px; margin-bottom: 24px; }
+
+/* タブ */
+.tabs {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 16px;
+  border-bottom: 2px solid #333;
+  padding-bottom: 0;
+}
+.tab-btn {
+  padding: 8px 20px;
+  background: none;
+  border: none;
+  border-radius: 6px 6px 0 0;
+  color: #999;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: color 0.15s, background 0.15s;
+}
+.tab-btn:hover { color: #e0e0e0; }
+.tab-btn.active {
+  color: #ffd700;
+  background: rgba(255, 215, 0, 0.08);
+  border-bottom: 2px solid #ffd700;
+  margin-bottom: -2px;
+}
+
+/* コンテンツ */
+.tab-content { display: none; }
+.tab-content.active { display: block; }
+.doc-body {
+  line-height: 1.8;
+  font-size: 14px;
+  color: #ccc;
+}
+.doc-body h2 {
+  font-size: 15px;
+  color: #e0e0e0;
+  margin: 24px 0 8px;
+  padding-bottom: 4px;
+  border-bottom: 1px solid #333;
+}
+.doc-body p { margin: 8px 0; }
+.doc-body ul { margin: 8px 0 8px 20px; }
+.doc-body li { margin: 4px 0; }
+.doc-body a { color: #ffd700; }
+.doc-body table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+  margin: 12px 0;
+}
+.doc-body th, .doc-body td {
+  padding: 6px 10px;
+  border: 1px solid #333;
+  text-align: left;
+}
+.doc-body th { background: #222; color: #e0e0e0; }
+.doc-body code {
+  background: #2a2a2a;
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-size: 12px;
+  color: #ffd700;
+}
+
+/* フッター */
+.footer {
+  margin-top: 40px;
+  text-align: center;
+}
+.btn-close {
+  padding: 12px 48px;
+  background: #ffd700;
+  color: #1a1a2e;
+  border: none;
+  border-radius: 8px;
+  font-size: 15px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.btn-close:hover { background: #c9a800; }
+.footer-note {
+  margin-top: 12px;
+  font-size: 12px;
+  color: #666;
+}
