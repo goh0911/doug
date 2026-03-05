@@ -1,3 +1,9 @@
 node_modules/
 .worktrees/
 mirror/
+.DS_Store
+.playwright-mcp/
+test-results/
+docs/plans/
+CLAUDE.md
+.claude/
