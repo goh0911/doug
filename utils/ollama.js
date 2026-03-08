@@ -66,14 +66,6 @@ export function ollamaParseResponse(content) {
         translated: ollamaCleanText(r.translated),
         type: r.type || 'speech',
       };
-      if (r.background) {
-        result.background = typeof r.background === 'string'
-          ? r.background
-          : (r.background.top && r.background.bottom
-            ? `linear-gradient(to bottom, ${r.background.bottom}, ${r.background.top})`
-            : undefined);
-      }
-      if (r.border) result.border = r.border;
       return result;
     });
   } catch { return []; }
