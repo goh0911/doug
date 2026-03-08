@@ -750,27 +750,17 @@ JSON配列のみ返してください:
   // 0-255 の数値を 2桁 hex 文字列に変換
   function toHex(n) { return Math.max(0, Math.min(255, Math.round(n))).toString(16).padStart(2, '0'); }
 
-  // テキスト bbox の外側リング（15% 拡張）から吹き出しの塗り色を取得（hex 文字列 or null）
-  // bbox 内側はテキストが混入するため除外し、外側の余白部分のみをサンプリングする
-  function sampleBackground(ctx, x1, y1, x2, y2, W, H) {
-    const bboxW = x2 - x1;
-    const bboxH = y2 - y1;
-    if (bboxW < 4 || bboxH < 4) return null;
-    // テキスト bbox を外側 15% 拡張してリング領域を定義
-    const padX = Math.max(3, Math.round(bboxW * 0.15));
-    const padY = Math.max(3, Math.round(bboxH * 0.15));
-    const ex1 = Math.max(0, x1 - padX);
-    const ey1 = Math.max(0, y1 - padY);
-    const ex2 = Math.min(W, x2 + padX);
-    const ey2 = Math.min(H, y2 + padY);
+  // テキスト bbox 外側リングから吹き出しの塗り色を取得（hex 文字列 or null）
+  // ex1/ey1/ex2/ey2 は bbox を 15% 拡張した領域（sampleBubbleColors で計算済み）
+  function sampleBackground(ctx, x1, y1, x2, y2, ex1, ey1, ex2, ey2) {
     const ew = ex2 - ex1;
     const eh = ey2 - ey1;
     if (ew < 1 || eh < 1) return null;
-    // 拡張領域を一括取得（GPU→CPU 転送を1回に削減）
+    // 拡張領域を一括取得
     const data = ctx.getImageData(ex1, ey1, ew, eh).data;
     const hist = {};
     let count = 0;
-    const STEP = 3;
+    const STEP = 2;
     for (let ly = 0; ly < eh; ly += STEP) {
       const gy = ey1 + ly;
       for (let lx = 0; lx < ew; lx += STEP) {
@@ -780,52 +770,55 @@ JSON配列のみ返してください:
         const idx = (ly * ew + lx) * 4;
         if (data[idx + 3] < 10) continue;
         const r = data[idx], g = data[idx + 1], b = data[idx + 2];
-        // 32段階に量子化してヒストグラム（最頻色 = 吹き出しの塗り色）
-        const key = ((r >> 3) << 10) | ((g >> 3) << 5) | (b >> 3);
-        if (!hist[key]) hist[key] = { r, g, b, count: 0 };
+        // 64段階に量子化（>> 2）してヒストグラム — バケツ内合計も保持して平均算出に使う
+        const key = ((r >> 2) << 12) | ((g >> 2) << 6) | (b >> 2);
+        if (!hist[key]) hist[key] = { rSum: 0, gSum: 0, bSum: 0, count: 0 };
+        hist[key].rSum += r; hist[key].gSum += g; hist[key].bSum += b;
         hist[key].count++;
         count++;
       }
     }
     if (count < 5) return null;
     const best = Object.values(hist).reduce((a, b) => a.count >= b.count ? a : b);
-    return `#${toHex(best.r)}${toHex(best.g)}${toHex(best.b)}`;
+    // 最頻色バケツが総サンプルの 25% 未満 → 複雑な背景として null を返す
+    if (best.count / count < 0.25) return null;
+    // バケツ内全ピクセルの平均で正確な色を算出（量子化誤差を除去）
+    return `#${toHex(best.rSum / best.count)}${toHex(best.gSum / best.count)}${toHex(best.bSum / best.count)}`;
   }
 
-  // bbox 外縁から枠線色を取得（吹き出し塗り色との輝度差40以上の場合のみ）
-  function sampleBorder(ctx, x1, y1, x2, y2, W, H, bgHex) {
+  // 拡張 bbox（ex1/ey1/ex2/ey2）の外縁から枠線色を取得
+  // 吹き出しの枠線は拡張領域の外縁付近に位置するため、内縁ではなく外縁をスキャンする
+  function sampleBorder(ctx, ex1, ey1, ex2, ey2, bgHex) {
     const bgR = parseInt(bgHex.slice(1, 3), 16);
     const bgG = parseInt(bgHex.slice(3, 5), 16);
     const bgB = parseInt(bgHex.slice(5, 7), 16);
     const bgLum = 0.299 * bgR + 0.587 * bgG + 0.114 * bgB;
     const SCAN = 3;
-    const sx1 = Math.max(0, x1);
-    const sy1 = Math.max(0, y1);
-    const sx2 = Math.min(W, x2);
-    const sy2 = Math.min(H, y2);
-    const sw = sx2 - sx1;
-    const sh = sy2 - sy1;
-    if (sw < 1 || sh < 1) return null;
-    // bbox 外縁領域を一括取得
-    const data = ctx.getImageData(sx1, sy1, sw, sh).data;
+    const ew = ex2 - ex1;
+    const eh = ey2 - ey1;
+    if (ew < 1 || eh < 1) return null;
+    // 拡張領域を一括取得（sampleBackground と同領域なのでキャッシュ効果あり）
+    const data = ctx.getImageData(ex1, ey1, ew, eh).data;
     const candidates = [];
     const STEP = 4;
-    for (let lx = 0; lx < sw; lx += STEP) {
-      for (let dy = 0; dy < Math.min(SCAN, sh); dy++) {
-        for (const ly of [dy, sh - 1 - dy]) {
+    // 上下辺（各 SCAN 行）
+    for (let lx = 0; lx < ew; lx += STEP) {
+      for (let dy = 0; dy < Math.min(SCAN, eh); dy++) {
+        for (const ly of [dy, eh - 1 - dy]) {
           if (ly < 0) continue;
-          const idx = (ly * sw + lx) * 4;
+          const idx = (ly * ew + lx) * 4;
           if (data[idx + 3] < 10) continue;
           const lum = 0.299 * data[idx] + 0.587 * data[idx + 1] + 0.114 * data[idx + 2];
           if (Math.abs(lum - bgLum) > 40) candidates.push({ r: data[idx], g: data[idx + 1], b: data[idx + 2], lum });
         }
       }
     }
-    for (let ly = SCAN; ly < sh - SCAN; ly += STEP) {
-      for (let dx = 0; dx < Math.min(SCAN, sw); dx++) {
-        for (const lx of [dx, sw - 1 - dx]) {
+    // 左右辺（各 SCAN 列）
+    for (let ly = SCAN; ly < eh - SCAN; ly += STEP) {
+      for (let dx = 0; dx < Math.min(SCAN, ew); dx++) {
+        for (const lx of [dx, ew - 1 - dx]) {
           if (lx < 0) continue;
-          const idx = (ly * sw + lx) * 4;
+          const idx = (ly * ew + lx) * 4;
           if (data[idx + 3] < 10) continue;
           const lum = 0.299 * data[idx] + 0.587 * data[idx + 1] + 0.114 * data[idx + 2];
           if (Math.abs(lum - bgLum) > 40) candidates.push({ r: data[idx], g: data[idx + 1], b: data[idx + 2], lum });
@@ -870,10 +863,17 @@ JSON配列のみ返してください:
       const x2 = Math.round(((item.bbox.left + item.bbox.width) / 100) * W);
       const y2 = Math.round(((item.bbox.top + item.bbox.height) / 100) * H);
 
-      const bg = sampleBackground(ctx, x1, y1, x2, y2, W, H);
+      // 拡張 bbox（外リング + 枠線スキャン領域）を1回計算して両関数に渡す
+      const padX = Math.max(3, Math.round((x2 - x1) * 0.15));
+      const padY = Math.max(3, Math.round((y2 - y1) * 0.15));
+      const ex1 = Math.max(0, x1 - padX);
+      const ey1 = Math.max(0, y1 - padY);
+      const ex2 = Math.min(W, x2 + padX);
+      const ey2 = Math.min(H, y2 + padY);
+      const bg = sampleBackground(ctx, x1, y1, x2, y2, ex1, ey1, ex2, ey2);
       if (bg) {
         item.background = bg;
-        item.border = sampleBorder(ctx, x1, y1, x2, y2, W, H, bg) || darkenColor(bg) || undefined;
+        item.border = sampleBorder(ctx, ex1, ey1, ex2, ey2, bg) || darkenColor(bg) || undefined;
       }
     }
   }
