@@ -770,7 +770,7 @@ JSON配列のみ返してください:
 
     if (colors.length < 3) return null;
     colors.sort((a, b) => a.lum - b.lum);
-    const mid = colors[Math.floor(colors.length / 2)];
+    const mid = colors[Math.floor((colors.length - 1) / 2)];
     return `#${toHex(mid.r)}${toHex(mid.g)}${toHex(mid.b)}`;
   }
 
