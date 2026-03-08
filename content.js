@@ -499,6 +499,7 @@ JSON配列のみ返してください:
       }
 
       if (fill) fill.style.width = '90%';
+      await sampleBubbleColors(imageData, response.translations);
       const adjustments = imageUrl ? await loadAdjustments(imageUrl) : {};
       const onAdjusted = imageUrl ? (idx, style) => saveAdjustment(imageUrl, idx, style) : null;
       renderOverlays(getOverlayTarget(comicInfo), response.translations, adjustments, onAdjusted, capturedRect);
