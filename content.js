@@ -755,7 +755,7 @@ JSON配列のみ返してください:
   function sampleBackground(ctx, x1, y1, x2, y2, ex1, ey1, ex2, ey2) {
     const ew = ex2 - ex1;
     const eh = ey2 - ey1;
-    if (ew < 1 || eh < 1) return null;
+    if (!(ew >= 1) || !(eh >= 1)) return null;  // NaN も排除
     // 拡張領域を一括取得
     const data = ctx.getImageData(ex1, ey1, ew, eh).data;
     const hist = {};
@@ -796,7 +796,7 @@ JSON配列のみ返してください:
     const SCAN = 3;
     const ew = ex2 - ex1;
     const eh = ey2 - ey1;
-    if (ew < 1 || eh < 1) return null;
+    if (!(ew >= 1) || !(eh >= 1)) return null;  // NaN も排除
     // 拡張領域を一括取得（sampleBackground と同領域なのでキャッシュ効果あり）
     const data = ctx.getImageData(ex1, ey1, ew, eh).data;
     const candidates = [];
@@ -862,6 +862,8 @@ JSON配列のみ返してください:
       const y1 = Math.round((item.bbox.top / 100) * H);
       const x2 = Math.round(((item.bbox.left + item.bbox.width) / 100) * W);
       const y2 = Math.round(((item.bbox.top + item.bbox.height) / 100) * H);
+      // NaN や無効座標（bbox プロパティが欠落している場合）はスキップ
+      if (!isFinite(x1) || !isFinite(y1) || !isFinite(x2) || !isFinite(y2) || x2 <= x1 || y2 <= y1) continue;
 
       // 拡張 bbox（外リング + 枠線スキャン領域）を1回計算して両関数に渡す
       const padX = Math.max(3, Math.round((x2 - x1) * 0.15));
