@@ -21,7 +21,7 @@ export async function handleImageTranslation(imageData, imageUrl, imageDims, opt
   const MODEL_KEY_MAP = {
     gemini: settings.geminiModel || 'gemini-2.5-flash-lite',
     claude: settings.claudeModel || 'claude-sonnet-4-6',
-    openai: settings.openaiModel || 'gpt-5.2-2025-12-11',
+    openai: settings.openaiModel || 'gpt-5.4-2026-03-05',
     ollama: settings.ollamaModel || 'qwen3-vl:8b',
   };
   const activeModel = MODEL_KEY_MAP[provider] || '';
@@ -285,7 +285,7 @@ async function translateImageWithOpenAI(apiKey, imageDataUrl, prompt, imageDims,
 
   const url = 'https://api.openai.com/v1/chat/completions';
   const body = JSON.stringify({
-    model: model || 'gpt-5.2-2025-12-11',
+    model: model || 'gpt-5.4-2026-03-05',
     max_tokens: 32000,
     messages: [{
       role: 'user',
