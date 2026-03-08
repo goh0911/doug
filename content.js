@@ -746,6 +746,107 @@ JSON配列のみ返してください:
     return `#${d(r)}${d(g)}${d(b)}`;
   }
 
+  // 0-255 の数値を 2桁 hex 文字列に変換
+  function toHex(n) { return Math.max(0, Math.min(255, Math.round(n))).toString(16).padStart(2, '0'); }
+
+  // bbox 内 8点のピクセルをサンプリングして背景色を返す（hex 文字列 or null）
+  function sampleBackground(ctx, x1, y1, x2, y2, W, H) {
+    const bboxW = x2 - x1;
+    const bboxH = y2 - y1;
+    if (bboxW < 4 || bboxH < 4) return null;
+    const INSET = Math.max(2, Math.round(Math.min(bboxW, bboxH) * 0.08));
+    const cx = Math.round((x1 + x2) / 2);
+    const cy = Math.round((y1 + y2) / 2);
+    const pts = [
+      [x1 + INSET, y1 + INSET], [cx, y1 + INSET], [x2 - INSET, y1 + INSET],
+      [x1 + INSET, cy],                             [x2 - INSET, cy],
+      [x1 + INSET, y2 - INSET], [cx, y2 - INSET], [x2 - INSET, y2 - INSET],
+    ].filter(([px, py]) => px >= 0 && py >= 0 && px < W && py < H);
+
+    const colors = pts.map(([px, py]) => {
+      const d = ctx.getImageData(px, py, 1, 1).data;
+      return d[3] > 10 ? { r: d[0], g: d[1], b: d[2], lum: 0.299 * d[0] + 0.587 * d[1] + 0.114 * d[2] } : null;
+    }).filter(Boolean);
+
+    if (colors.length < 3) return null;
+    colors.sort((a, b) => a.lum - b.lum);
+    const mid = colors[Math.floor(colors.length / 2)];
+    return `#${toHex(mid.r)}${toHex(mid.g)}${toHex(mid.b)}`;
+  }
+
+  // bbox 外縁 3px をサンプリングして枠線色を返す（背景と輝度差40以上の場合のみ）
+  function sampleBorder(ctx, x1, y1, x2, y2, W, H, bgHex) {
+    const bgR = parseInt(bgHex.slice(1, 3), 16);
+    const bgG = parseInt(bgHex.slice(3, 5), 16);
+    const bgB = parseInt(bgHex.slice(5, 7), 16);
+    const bgLum = 0.299 * bgR + 0.587 * bgG + 0.114 * bgB;
+    const SCAN = 3;
+    const edgePts = [];
+    for (let px = x1; px <= x2; px += 4) {
+      for (let dy = 0; dy < SCAN; dy++) {
+        edgePts.push([px, y1 + dy], [px, y2 - dy]);
+      }
+    }
+    for (let py = y1 + SCAN; py <= y2 - SCAN; py += 4) {
+      for (let dx = 0; dx < SCAN; dx++) {
+        edgePts.push([x1 + dx, py], [x2 - dx, py]);
+      }
+    }
+    const candidates = edgePts
+      .filter(([px, py]) => px >= 0 && py >= 0 && px < W && py < H)
+      .map(([px, py]) => {
+        const d = ctx.getImageData(px, py, 1, 1).data;
+        if (d[3] < 10) return null;
+        const lum = 0.299 * d[0] + 0.587 * d[1] + 0.114 * d[2];
+        return Math.abs(lum - bgLum) > 40 ? { r: d[0], g: d[1], b: d[2], lum } : null;
+      })
+      .filter(Boolean);
+    if (candidates.length < 3) return null;
+    candidates.sort((a, b) => a.lum - b.lum);
+    const dark = candidates.slice(0, Math.ceil(candidates.length / 3));
+    const n = dark.length;
+    const avg = dark.reduce((acc, c) => ({ r: acc.r + c.r, g: acc.g + c.g, b: acc.b + c.b }), { r: 0, g: 0, b: 0 });
+    return `#${toHex(avg.r / n)}${toHex(avg.g / n)}${toHex(avg.b / n)}`;
+  }
+
+  // imageDataUrl の Canvas から各 item の bbox ピクセルをサンプリングして
+  // item.background / item.border を付与する
+  async function sampleBubbleColors(imageDataUrl, items) {
+    if (!imageDataUrl || !items || items.length === 0) return;
+    let img;
+    try {
+      img = await new Promise((resolve, reject) => {
+        const i = new Image();
+        i.onload = () => resolve(i);
+        i.onerror = reject;
+        i.src = imageDataUrl;
+      });
+    } catch { return; }
+
+    const canvas = document.createElement('canvas');
+    canvas.width = img.naturalWidth;
+    canvas.height = img.naturalHeight;
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
+    ctx.drawImage(img, 0, 0);
+    const W = canvas.width;
+    const H = canvas.height;
+
+    for (const item of items) {
+      if (!item.bbox || item.type === 'sfx') continue;
+      // bbox は % 単位（0–100）→ ピクセル座標に変換
+      const x1 = Math.round((item.bbox.left / 100) * W);
+      const y1 = Math.round((item.bbox.top / 100) * H);
+      const x2 = Math.round(((item.bbox.left + item.bbox.width) / 100) * W);
+      const y2 = Math.round(((item.bbox.top + item.bbox.height) / 100) * H);
+
+      const bg = sampleBackground(ctx, x1, y1, x2, y2, W, H);
+      if (bg) {
+        item.background = bg;
+        item.border = sampleBorder(ctx, x1, y1, x2, y2, W, H, bg) || darkenColor(bg) || undefined;
+      }
+    }
+  }
+
   function renderOverlays(targetEl, translations, adjustments = {}, onAdjusted = null, capturedRect = null) {
     if (!targetEl || !translations) return;
     clearOverlays();
