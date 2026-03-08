@@ -59,22 +59,6 @@ describe('parseVisionResponse', () => {
     expect(result).toHaveLength(1);
     expect(result[0].original).toBe('B');
   });
-  it('background（文字列）が保存される', () => {
-    const input = JSON.stringify([{
-      original: 'X', translated: 'エックス', box: [0, 0, 100, 100],
-      background: '#ffe082',
-    }]);
-    const result = parseVisionResponse(input, {});
-    expect(result[0].background).toBe('#ffe082');
-  });
-  it('background（グラデーション）が linear-gradient に変換される', () => {
-    const input = JSON.stringify([{
-      original: 'X', translated: 'エックス', box: [0, 0, 100, 100],
-      background: { top: '#fff', bottom: '#000' },
-    }]);
-    const result = parseVisionResponse(input, {});
-    expect(result[0].background).toBe('linear-gradient(to bottom, #000, #fff)');
-  });
   it('Markdown コードブロックを取り除く', () => {
     const inner = JSON.stringify([{ original: 'A', translated: 'エー', box: [0,0,100,100] }]);
     const input = '```json\n' + inner + '\n```';

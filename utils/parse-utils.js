@@ -84,14 +84,6 @@ export function parseVisionResponse(geminiResponse, imageDims) {
           translated: cleanTranslatedText(r.translated),
           type: r.type || 'speech',
         };
-        if (r.background) {
-          if (typeof r.background === 'string') {
-            result.background = r.background;
-          } else if (r.background.top && r.background.bottom) {
-            result.background = `linear-gradient(to bottom, ${r.background.bottom}, ${r.background.top})`;
-          }
-        }
-        if (r.border) result.border = r.border;
         return result;
       });
   } catch {
