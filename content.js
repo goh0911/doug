@@ -499,7 +499,7 @@ JSON配列のみ返してください:
       }
 
       if (fill) fill.style.width = '90%';
-      await sampleBubbleColors(imageData, response.translations);
+      await sampleBubbleColors(imageData, response.translations).catch(() => {});
       const adjustments = imageUrl ? await loadAdjustments(imageUrl) : {};
       const onAdjusted = imageUrl ? (idx, style) => saveAdjustment(imageUrl, idx, style) : null;
       renderOverlays(getOverlayTarget(comicInfo), response.translations, adjustments, onAdjusted, capturedRect);
@@ -855,29 +855,31 @@ JSON配列のみ返してください:
     const W = canvas.width;
     const H = canvas.height;
 
-    for (const item of items) {
-      if (!item.bbox || item.type === 'sfx') continue;
-      // bbox は % 単位（0–100）→ ピクセル座標に変換
-      const x1 = Math.round((item.bbox.left / 100) * W);
-      const y1 = Math.round((item.bbox.top / 100) * H);
-      const x2 = Math.round(((item.bbox.left + item.bbox.width) / 100) * W);
-      const y2 = Math.round(((item.bbox.top + item.bbox.height) / 100) * H);
-      // NaN や無効座標（bbox プロパティが欠落している場合）はスキップ
-      if (!isFinite(x1) || !isFinite(y1) || !isFinite(x2) || !isFinite(y2) || x2 <= x1 || y2 <= y1) continue;
+    try {
+      for (const item of items) {
+        if (!item.bbox || item.type === 'sfx') continue;
+        // bbox は % 単位（0–100）→ ピクセル座標に変換
+        const x1 = Math.round((item.bbox.left / 100) * W);
+        const y1 = Math.round((item.bbox.top / 100) * H);
+        const x2 = Math.round(((item.bbox.left + item.bbox.width) / 100) * W);
+        const y2 = Math.round(((item.bbox.top + item.bbox.height) / 100) * H);
+        // NaN や無効座標（bbox プロパティが欠落している場合）はスキップ
+        if (!isFinite(x1) || !isFinite(y1) || !isFinite(x2) || !isFinite(y2) || x2 <= x1 || y2 <= y1) continue;
 
-      // 拡張 bbox（外リング + 枠線スキャン領域）を1回計算して両関数に渡す
-      const padX = Math.max(3, Math.round((x2 - x1) * 0.15));
-      const padY = Math.max(3, Math.round((y2 - y1) * 0.15));
-      const ex1 = Math.max(0, x1 - padX);
-      const ey1 = Math.max(0, y1 - padY);
-      const ex2 = Math.min(W, x2 + padX);
-      const ey2 = Math.min(H, y2 + padY);
-      const bg = sampleBackground(ctx, x1, y1, x2, y2, ex1, ey1, ex2, ey2);
-      if (bg) {
-        item.background = bg;
-        item.border = sampleBorder(ctx, ex1, ey1, ex2, ey2, bg) || darkenColor(bg) || undefined;
+        // 拡張 bbox（外リング + 枠線スキャン領域）を1回計算して両関数に渡す
+        const padX = Math.max(3, Math.round((x2 - x1) * 0.15));
+        const padY = Math.max(3, Math.round((y2 - y1) * 0.15));
+        const ex1 = Math.max(0, x1 - padX);
+        const ey1 = Math.max(0, y1 - padY);
+        const ex2 = Math.min(W, x2 + padX);
+        const ey2 = Math.min(H, y2 + padY);
+        const bg = sampleBackground(ctx, x1, y1, x2, y2, ex1, ey1, ex2, ey2);
+        if (bg) {
+          item.background = bg;
+          item.border = sampleBorder(ctx, ex1, ey1, ex2, ey2, bg) || darkenColor(bg) || undefined;
+        }
       }
-    }
+    } catch { /* サンプリング失敗時も翻訳表示は継続 */ }
   }
 
   function renderOverlays(targetEl, translations, adjustments = {}, onAdjusted = null, capturedRect = null) {
