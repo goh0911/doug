@@ -750,58 +750,88 @@ JSON配列のみ返してください:
   // 0-255 の数値を 2桁 hex 文字列に変換
   function toHex(n) { return Math.max(0, Math.min(255, Math.round(n))).toString(16).padStart(2, '0'); }
 
-  // bbox 内 8点のピクセルをサンプリングして背景色を返す（hex 文字列 or null）
+  // テキスト bbox の外側リング（15% 拡張）から吹き出しの塗り色を取得（hex 文字列 or null）
+  // bbox 内側はテキストが混入するため除外し、外側の余白部分のみをサンプリングする
   function sampleBackground(ctx, x1, y1, x2, y2, W, H) {
     const bboxW = x2 - x1;
     const bboxH = y2 - y1;
     if (bboxW < 4 || bboxH < 4) return null;
-    const INSET = Math.max(2, Math.round(Math.min(bboxW, bboxH) * 0.08));
-    const cx = Math.round((x1 + x2) / 2);
-    const cy = Math.round((y1 + y2) / 2);
-    const pts = [
-      [x1 + INSET, y1 + INSET], [cx, y1 + INSET], [x2 - INSET, y1 + INSET],
-      [x1 + INSET, cy],                             [x2 - INSET, cy],
-      [x1 + INSET, y2 - INSET], [cx, y2 - INSET], [x2 - INSET, y2 - INSET],
-    ].filter(([px, py]) => px >= 0 && py >= 0 && px < W && py < H);
-
-    const colors = pts.map(([px, py]) => {
-      const d = ctx.getImageData(px, py, 1, 1).data;
-      return d[3] > 10 ? { r: d[0], g: d[1], b: d[2], lum: 0.299 * d[0] + 0.587 * d[1] + 0.114 * d[2] } : null;
-    }).filter(Boolean);
-
-    if (colors.length < 3) return null;
-    colors.sort((a, b) => a.lum - b.lum);
-    const mid = colors[Math.floor((colors.length - 1) / 2)];
-    return `#${toHex(mid.r)}${toHex(mid.g)}${toHex(mid.b)}`;
+    // テキスト bbox を外側 15% 拡張してリング領域を定義
+    const padX = Math.max(3, Math.round(bboxW * 0.15));
+    const padY = Math.max(3, Math.round(bboxH * 0.15));
+    const ex1 = Math.max(0, x1 - padX);
+    const ey1 = Math.max(0, y1 - padY);
+    const ex2 = Math.min(W, x2 + padX);
+    const ey2 = Math.min(H, y2 + padY);
+    const ew = ex2 - ex1;
+    const eh = ey2 - ey1;
+    if (ew < 1 || eh < 1) return null;
+    // 拡張領域を一括取得（GPU→CPU 転送を1回に削減）
+    const data = ctx.getImageData(ex1, ey1, ew, eh).data;
+    const hist = {};
+    let count = 0;
+    const STEP = 3;
+    for (let ly = 0; ly < eh; ly += STEP) {
+      const gy = ey1 + ly;
+      for (let lx = 0; lx < ew; lx += STEP) {
+        const gx = ex1 + lx;
+        // 元 bbox の内側はスキップ（テキストが混入するため）
+        if (gx >= x1 && gx < x2 && gy >= y1 && gy < y2) continue;
+        const idx = (ly * ew + lx) * 4;
+        if (data[idx + 3] < 10) continue;
+        const r = data[idx], g = data[idx + 1], b = data[idx + 2];
+        // 32段階に量子化してヒストグラム（最頻色 = 吹き出しの塗り色）
+        const key = ((r >> 3) << 10) | ((g >> 3) << 5) | (b >> 3);
+        if (!hist[key]) hist[key] = { r, g, b, count: 0 };
+        hist[key].count++;
+        count++;
+      }
+    }
+    if (count < 5) return null;
+    const best = Object.values(hist).reduce((a, b) => a.count >= b.count ? a : b);
+    return `#${toHex(best.r)}${toHex(best.g)}${toHex(best.b)}`;
   }
 
-  // bbox 外縁 3px をサンプリングして枠線色を返す（背景と輝度差40以上の場合のみ）
+  // bbox 外縁から枠線色を取得（吹き出し塗り色との輝度差40以上の場合のみ）
   function sampleBorder(ctx, x1, y1, x2, y2, W, H, bgHex) {
     const bgR = parseInt(bgHex.slice(1, 3), 16);
     const bgG = parseInt(bgHex.slice(3, 5), 16);
     const bgB = parseInt(bgHex.slice(5, 7), 16);
     const bgLum = 0.299 * bgR + 0.587 * bgG + 0.114 * bgB;
     const SCAN = 3;
-    const edgePts = [];
-    for (let px = x1; px <= x2; px += 4) {
-      for (let dy = 0; dy < SCAN; dy++) {
-        edgePts.push([px, y1 + dy], [px, y2 - dy]);
+    const sx1 = Math.max(0, x1);
+    const sy1 = Math.max(0, y1);
+    const sx2 = Math.min(W, x2);
+    const sy2 = Math.min(H, y2);
+    const sw = sx2 - sx1;
+    const sh = sy2 - sy1;
+    if (sw < 1 || sh < 1) return null;
+    // bbox 外縁領域を一括取得
+    const data = ctx.getImageData(sx1, sy1, sw, sh).data;
+    const candidates = [];
+    const STEP = 4;
+    for (let lx = 0; lx < sw; lx += STEP) {
+      for (let dy = 0; dy < Math.min(SCAN, sh); dy++) {
+        for (const ly of [dy, sh - 1 - dy]) {
+          if (ly < 0) continue;
+          const idx = (ly * sw + lx) * 4;
+          if (data[idx + 3] < 10) continue;
+          const lum = 0.299 * data[idx] + 0.587 * data[idx + 1] + 0.114 * data[idx + 2];
+          if (Math.abs(lum - bgLum) > 40) candidates.push({ r: data[idx], g: data[idx + 1], b: data[idx + 2], lum });
+        }
       }
     }
-    for (let py = y1 + SCAN; py <= y2 - SCAN; py += 4) {
-      for (let dx = 0; dx < SCAN; dx++) {
-        edgePts.push([x1 + dx, py], [x2 - dx, py]);
+    for (let ly = SCAN; ly < sh - SCAN; ly += STEP) {
+      for (let dx = 0; dx < Math.min(SCAN, sw); dx++) {
+        for (const lx of [dx, sw - 1 - dx]) {
+          if (lx < 0) continue;
+          const idx = (ly * sw + lx) * 4;
+          if (data[idx + 3] < 10) continue;
+          const lum = 0.299 * data[idx] + 0.587 * data[idx + 1] + 0.114 * data[idx + 2];
+          if (Math.abs(lum - bgLum) > 40) candidates.push({ r: data[idx], g: data[idx + 1], b: data[idx + 2], lum });
+        }
       }
     }
-    const candidates = edgePts
-      .filter(([px, py]) => px >= 0 && py >= 0 && px < W && py < H)
-      .map(([px, py]) => {
-        const d = ctx.getImageData(px, py, 1, 1).data;
-        if (d[3] < 10) return null;
-        const lum = 0.299 * d[0] + 0.587 * d[1] + 0.114 * d[2];
-        return Math.abs(lum - bgLum) > 40 ? { r: d[0], g: d[1], b: d[2], lum } : null;
-      })
-      .filter(Boolean);
     if (candidates.length < 3) return null;
     candidates.sort((a, b) => a.lum - b.lum);
     const dark = candidates.slice(0, Math.ceil(candidates.length / 3));
