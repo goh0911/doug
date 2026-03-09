@@ -50,10 +50,13 @@ export function ollamaParseResponse(content) {
   try {
     return results.filter(r => r.translated && (r.box || r.bbox)).map(r => {
       let top, left, width, height;
-      if (r.box && Array.isArray(r.box) && r.box.length === 4) {
-        const [yMin, xMin, yMax, xMax] = r.box;
-        top = (yMin / 1000) * 100; left = (xMin / 1000) * 100;
-        width = ((xMax - xMin) / 1000) * 100; height = ((yMax - yMin) / 1000) * 100;
+      if (r.box && Array.isArray(r.box)) {
+        const box = (r.box.length === 1 && Array.isArray(r.box[0])) ? r.box[0] : r.box;
+        if (box.length === 4) {
+          const [yMin, xMin, yMax, xMax] = box;
+          top = (yMin / 1000) * 100; left = (xMin / 1000) * 100;
+          width = ((xMax - xMin) / 1000) * 100; height = ((yMax - yMin) / 1000) * 100;
+        }
       } else if (r.bbox) {
         const bx = r.bbox.x ?? r.bbox.left ?? 0, by = r.bbox.y ?? r.bbox.top ?? 0;
         const bw = r.bbox.w ?? r.bbox.width ?? 100, bh = r.bbox.h ?? r.bbox.height ?? 50;
@@ -67,6 +70,7 @@ export function ollamaParseResponse(content) {
         type: r.type || 'speech',
       };
       return result;
-    });
+    })
+    .filter(item => item.bbox.top != null && item.bbox.left != null);
   } catch { return []; }
 }

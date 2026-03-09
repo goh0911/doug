@@ -62,12 +62,16 @@ export function parseVisionResponse(geminiResponse, imageDims) {
       .filter(r => r.translated && (r.box || r.bbox))
       .map(r => {
         let top, left, width, height;
-        if (r.box && Array.isArray(r.box) && r.box.length === 4) {
-          const [yMin, xMin, yMax, xMax] = r.box;
-          top = (yMin / 1000) * 100;
-          left = (xMin / 1000) * 100;
-          width = ((xMax - xMin) / 1000) * 100;
-          height = ((yMax - yMin) / 1000) * 100;
+        if (r.box && Array.isArray(r.box)) {
+          // [[y, x, Y, X]] のように1段ネストしている場合を展開
+          const box = (r.box.length === 1 && Array.isArray(r.box[0])) ? r.box[0] : r.box;
+          if (box.length === 4) {
+            const [yMin, xMin, yMax, xMax] = box;
+            top = (yMin / 1000) * 100;
+            left = (xMin / 1000) * 100;
+            width = ((xMax - xMin) / 1000) * 100;
+            height = ((yMax - yMin) / 1000) * 100;
+          }
         } else if (r.bbox) {
           const bx = r.bbox.x ?? r.bbox.left ?? 0;
           const by = r.bbox.y ?? r.bbox.top ?? 0;
@@ -85,7 +89,8 @@ export function parseVisionResponse(geminiResponse, imageDims) {
           type: r.type || 'speech',
         };
         return result;
-      });
+      })
+      .filter(item => item.bbox.top != null && item.bbox.left != null);
   } catch {
     return [];
   }

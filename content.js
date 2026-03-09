@@ -750,27 +750,24 @@ JSON配列のみ返してください:
   // 0-255 の数値を 2桁 hex 文字列に変換
   function toHex(n) { return Math.max(0, Math.min(255, Math.round(n))).toString(16).padStart(2, '0'); }
 
-  // テキスト bbox 外側リングから吹き出しの塗り色を取得（hex 文字列 or null）
-  // ex1/ey1/ex2/ey2 は bbox を 15% 拡張した領域（sampleBubbleColors で計算済み）
-  function sampleBackground(ctx, x1, y1, x2, y2, ex1, ey1, ex2, ey2) {
-    const ew = ex2 - ex1;
-    const eh = ey2 - ey1;
-    if (!(ew >= 1) || !(eh >= 1)) return null;  // NaN も排除
-    // 拡張領域を一括取得
-    const data = ctx.getImageData(ex1, ey1, ew, eh).data;
+  // テキスト bbox 内側から吹き出しの塗り色を取得（hex 文字列 or null）
+  // 暗いピクセル（テキスト・枠線）を輝度フィルタで除外し、残った明るいピクセルの最頻色を返す
+  function sampleBackground(ctx, x1, y1, x2, y2) {
+    const w = x2 - x1;
+    const h = y2 - y1;
+    if (!(w >= 1) || !(h >= 1)) return null;
+    const data = ctx.getImageData(x1, y1, w, h).data;
     const hist = {};
     let count = 0;
     const STEP = 2;
-    for (let ly = 0; ly < eh; ly += STEP) {
-      const gy = ey1 + ly;
-      for (let lx = 0; lx < ew; lx += STEP) {
-        const gx = ex1 + lx;
-        // 元 bbox の内側はスキップ（テキストが混入するため）
-        if (gx >= x1 && gx < x2 && gy >= y1 && gy < y2) continue;
-        const idx = (ly * ew + lx) * 4;
+    for (let ly = 0; ly < h; ly += STEP) {
+      for (let lx = 0; lx < w; lx += STEP) {
+        const idx = (ly * w + lx) * 4;
         if (data[idx + 3] < 10) continue;
         const r = data[idx], g = data[idx + 1], b = data[idx + 2];
-        // 64段階に量子化（>> 2）してヒストグラム — バケツ内合計も保持して平均算出に使う
+        // 暗いピクセル（黒テキスト・枠線）を除外
+        const lum = 0.299 * r + 0.587 * g + 0.114 * b;
+        if (lum < 40) continue;
         const key = ((r >> 2) << 12) | ((g >> 2) << 6) | (b >> 2);
         if (!hist[key]) hist[key] = { rSum: 0, gSum: 0, bSum: 0, count: 0 };
         hist[key].rSum += r; hist[key].gSum += g; hist[key].bSum += b;
@@ -780,9 +777,7 @@ JSON配列のみ返してください:
     }
     if (count < 5) return null;
     const best = Object.values(hist).reduce((a, b) => a.count >= b.count ? a : b);
-    // 最頻色バケツが総サンプルの 25% 未満 → 複雑な背景として null を返す
-    if (best.count / count < 0.25) return null;
-    // バケツ内全ピクセルの平均で正確な色を算出（量子化誤差を除去）
+    if (best.count / count < 0.20) return null;
     return `#${toHex(best.rSum / best.count)}${toHex(best.gSum / best.count)}${toHex(best.bSum / best.count)}`;
   }
 
@@ -866,16 +861,16 @@ JSON配列のみ返してください:
         // NaN や無効座標（bbox プロパティが欠落している場合）はスキップ
         if (!isFinite(x1) || !isFinite(y1) || !isFinite(x2) || !isFinite(y2) || x2 <= x1 || y2 <= y1) continue;
 
-        // 拡張 bbox（外リング + 枠線スキャン領域）を1回計算して両関数に渡す
-        const padX = Math.max(3, Math.round((x2 - x1) * 0.15));
-        const padY = Math.max(3, Math.round((y2 - y1) * 0.15));
-        const ex1 = Math.max(0, x1 - padX);
-        const ey1 = Math.max(0, y1 - padY);
-        const ex2 = Math.min(W, x2 + padX);
-        const ey2 = Math.min(H, y2 + padY);
-        const bg = sampleBackground(ctx, x1, y1, x2, y2, ex1, ey1, ex2, ey2);
+        const bg = sampleBackground(ctx, x1, y1, x2, y2);
         if (bg) {
           item.background = bg;
+          // 枠線スキャン用に bbox を 20% 拡張した領域を計算
+          const padX = Math.max(3, Math.round((x2 - x1) * 0.20));
+          const padY = Math.max(3, Math.round((y2 - y1) * 0.20));
+          const ex1 = Math.max(0, x1 - padX);
+          const ey1 = Math.max(0, y1 - padY);
+          const ex2 = Math.min(W, x2 + padX);
+          const ey2 = Math.min(H, y2 + padY);
           item.border = sampleBorder(ctx, ex1, ey1, ex2, ey2, bg) || darkenColor(bg) || undefined;
         }
       }
