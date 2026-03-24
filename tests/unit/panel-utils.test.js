@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { transformBboxToFullPage } from '../../utils/panel-utils.js';
+import { transformBboxToFullPage, mergeTranslations } from '../../utils/panel-utils.js';
 
 describe('transformBboxToFullPage', () => {
   it('crop中央の吹き出しをフルページ座標に変換する', () => {
@@ -43,5 +43,70 @@ describe('transformBboxToFullPage', () => {
     expect(result.top).toBeCloseTo(26);
     expect(result.width).toBeCloseTo(15);
     expect(result.height).toBeCloseTo(32);
+  });
+});
+
+describe('mergeTranslations', () => {
+  const base = (left, top, w, h) => ({ left, top, width: w, height: h });
+
+  it('IoU >= 0.3 の既存アイテムを incoming で置き換える', () => {
+    const existing = [
+      { original: 'A', translated: '日本語A', bbox: base(10, 10, 20, 20) },
+    ];
+    const incoming = [
+      { original: 'A2', translated: '日本語A2', bbox: base(12, 12, 20, 20) }, // 大きく重なる
+    ];
+    const { translations, changedIndices } = mergeTranslations(existing, incoming);
+    expect(translations).toHaveLength(1); // 置き換えなので合計1件
+    expect(translations[0].original).toBe('A2');
+    expect(changedIndices.has(0)).toBe(true);
+  });
+
+  it('IoU < 0.3 の incoming は末尾に追加する', () => {
+    const existing = [
+      { original: 'A', translated: '日本語A', bbox: base(10, 10, 20, 20) },
+    ];
+    const incoming = [
+      { original: 'B', translated: '日本語B', bbox: base(80, 80, 10, 10) }, // 離れている
+    ];
+    const { translations, changedIndices } = mergeTranslations(existing, incoming);
+    expect(translations).toHaveLength(2);
+    expect(translations[1].original).toBe('B');
+    expect(changedIndices.has(1)).toBe(true);
+  });
+
+  it('既存配列を変更せず新配列を返す（pure function）', () => {
+    const existing = [
+      { original: 'A', translated: '日本語A', bbox: base(10, 10, 20, 20) },
+    ];
+    const incoming = [
+      { original: 'A2', translated: '日本語A2', bbox: base(12, 12, 20, 20) },
+    ];
+    const { translations } = mergeTranslations(existing, incoming);
+    expect(existing[0].original).toBe('A'); // 元配列は変更されない
+    expect(translations).not.toBe(existing); // 新配列
+  });
+
+  it('incoming が空の場合は既存をそのまま返す', () => {
+    const existing = [
+      { original: 'A', translated: '日本語A', bbox: base(10, 10, 20, 20) },
+    ];
+    const { translations, changedIndices } = mergeTranslations(existing, []);
+    expect(translations).toHaveLength(1);
+    expect(changedIndices.size).toBe(0);
+  });
+
+  it('複数 incoming が同じ既存にマッチした場合、後の incoming が勝つ', () => {
+    const existing = [
+      { original: 'A', translated: '日本語A', bbox: base(10, 10, 20, 20) },
+    ];
+    const incoming = [
+      { original: 'A2', translated: '日本語A2', bbox: base(11, 11, 18, 18) },
+      { original: 'A3', translated: '日本語A3', bbox: base(12, 12, 16, 16) },
+    ];
+    const { translations } = mergeTranslations(existing, incoming);
+    // 両方が既存の index 0 に高IoUでマッチ。後の A3 が最終的に勝つ
+    expect(translations).toHaveLength(1);
+    expect(translations[0].original).toBe('A3');
   });
 });
