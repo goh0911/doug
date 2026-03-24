@@ -1399,10 +1399,9 @@ JSON配列のみ返してください:
         '<path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>' +
         '</svg>');
 
-      // TODO Phase 4: クリック時にパネルをcropして再翻訳
       btn.addEventListener('click', (e) => {
         e.stopPropagation();
-        showNotification('パネル再翻訳（フェーズ4で実装予定）', 'info');
+        retranslatePanel(group, pgResult.W, pgResult.H);
       });
 
       overlayContainer.appendChild(btn);
