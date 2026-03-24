@@ -15,6 +15,42 @@
   let autoTranslateTimer = null;
 
   // ============================================================
+  // パネルbbox推定定数（フェーズ1チューニング用 — ファイル先頭集約）
+  // ============================================================
+  const FLOOD_COLOR_THRESHOLD         = 120;  // Flood Fill停止判定・色距離（マンハッタン）
+  const CAPTION_FLOOD_COLOR_THRESHOLD = 80;   // caption用（均一背景での過展開を抑制）
+  const FILL_AREA_RATIO               = 20;   // 上限: bubbleBboxArea × k
+  const PAGE_AREA_MAX_RATIO           = 0.5;  // 上限: pageArea × ratio（見開き2コマ対応で0.4→0.5）
+  /* eslint-disable-next-line no-unused-vars */
+  const PANEL_IOU_THRESHOLD    = 0.35; // 同一パネル判定（フェーズ2で使用）
+  const BBOX_STABLE_STEPS      = 30;   // 安定判定ウィンドウ数
+  const BBOX_STABLE_GROWTH_MAX = 0.01; // bbox面積増加率の安定閾値（1%）
+  /* eslint-disable-next-line no-unused-vars */
+  const PANEL_CROP_PADDING     = 0.07; // crop時のパディング率（フェーズ4で使用）
+  const PANEL_HOVER_EXPAND     = 15;   // パネルホバー検出を bbox から ±N% 拡張（吹き出し bbox が小さい場合の補正）
+  const SEED_SAMPLE_SIZE       = 5;    // 起点サンプル固定サイズ（5×5）
+  const STABLE_CHECK_INTERVAL  = 100;  // 安定判定チェック間隔（ピクセル数、大パネルの早期終了防止で50→100）
+
+  // グループ色パレット（フェーズ2デバッグ可視化用）
+  const GROUP_COLORS = [
+    [255, 100, 100],  // 赤
+    [100, 160, 255],  // 青
+    [ 80, 210, 120],  // 緑
+    [255, 190,  60],  // 黄
+    [190, 100, 255],  // 紫
+    [255, 140,  50],  // 橙
+    [ 60, 210, 210],  // シアン
+    [255, 100, 180],  // ピンク
+  ];
+
+  // デバッグ表示用ステート（フェーズ1/2）
+  let _lastImageDataUrl = null;
+  let _lastTranslations = null;
+  let _debugCanvas = null;
+  // パネルグループ（フェーズ3）
+  let _lastPanelGroups = null;
+
+  // ============================================================
   // Ollama 直接呼び出し（Service Worker タイムアウト回避）
   // content script はページ側で動くため長時間処理でも停止しない
   // ============================================================
@@ -228,7 +264,18 @@ JSON配列のみ返してください:
       '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">' +
       '<line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>');
 
-    toolbar.append(translateBtn, autoBtn, toggleBtn, clearBtn);
+    const debugBtn = document.createElement('button');
+    debugBtn.id = 'mut-btn-debug';
+    debugBtn.className = 'mut-btn';
+    debugBtn.title = 'パネルbboxデバッグ（クリックで表示/非表示）';
+    debugBtn.style.display = 'none';
+    debugBtn.insertAdjacentHTML('afterbegin',
+      '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">' +
+      '<rect x="2" y="2" width="9" height="9"/><rect x="13" y="2" width="9" height="9"/>' +
+      '<rect x="2" y="13" width="9" height="9"/><rect x="13" y="13" width="9" height="9"/>' +
+      '</svg>');
+
+    toolbar.append(translateBtn, autoBtn, toggleBtn, clearBtn, debugBtn);
     const parent = getUIParent();
     parent.appendChild(toolbar);
 
@@ -247,6 +294,13 @@ JSON配列のみ返してください:
     document.getElementById('mut-btn-auto').addEventListener('click', toggleAutoTranslate);
     document.getElementById('mut-btn-toggle').addEventListener('click', toggleOverlays);
     document.getElementById('mut-btn-clear').addEventListener('click', clearOverlays);
+    document.getElementById('mut-btn-debug').addEventListener('click', () => {
+      if (_debugCanvas) {
+        clearPanelDebug();
+      } else if (_lastImageDataUrl && _lastTranslations) {
+        showPanelDebug(_lastImageDataUrl, _lastTranslations);
+      }
+    });
 
     makeDraggable(toolbar);
   }
@@ -276,6 +330,7 @@ JSON配列のみ返してください:
   function showExtraButtons() {
     document.getElementById('mut-btn-toggle').style.display = '';
     document.getElementById('mut-btn-clear').style.display = '';
+    document.getElementById('mut-btn-debug').style.display = '';
   }
 
   // ============================================================
@@ -500,10 +555,22 @@ JSON配列のみ返してください:
 
       if (fill) fill.style.width = '90%';
       await sampleBubbleColors(imageData, response.translations).catch(() => {});
+      // フェーズ1: デバッグ用に最終翻訳状態を保存
+      _lastImageDataUrl = imageData;
+      _lastTranslations = response.translations;
+      _lastPanelGroups = null;
+      clearPanelDebug();
       const adjustments = imageUrl ? await loadAdjustments(imageUrl) : {};
       const onAdjusted = imageUrl ? (idx, style) => saveAdjustment(imageUrl, idx, style) : null;
       renderOverlays(getOverlayTarget(comicInfo), response.translations, adjustments, onAdjusted, capturedRect);
       showExtraButtons();
+      // フェーズ3: パネル再翻訳ボタンを非同期で追加（翻訳表示をブロックしない）
+      computePanelGroups(imageData, response.translations).then(pg => {
+        _lastPanelGroups = pg;
+        console.log('[doug] computePanelGroups result:', pg ? `${pg.groups.length} groups` : 'null');
+        if (overlayContainer) addPanelRetranslateButtons(pg);
+        else console.log('[doug] overlayContainer is null, skipping addPanelRetranslateButtons');
+      }).catch((err) => { console.log('[doug] computePanelGroups error:', err); });
 
       const message = response.fromCache
         ? `${response.translations.length}件のテキストを表示しました（キャッシュ）`
@@ -877,6 +944,519 @@ JSON配列のみ返してください:
     } catch { /* サンプリング失敗時も翻訳表示は継続 */ }
   }
 
+  // ============================================================
+  // Flood Fill — パネルbbox推定（フェーズ1）
+  // ============================================================
+
+  // Flood Fill起点（seed）を決定する
+  // data: ImageData.data（Uint8ClampedArray）, W/H: 画像サイズ
+  // bboxPx: { x1, y1, x2, y2 } 吹き出しピクセル座標
+  // 返値: { seedX, seedY, seedColor: {r,g,b} } または null
+  function findFloodSeed(data, W, H, bboxPx) {
+    const { x1, y1, x2, y2 } = bboxPx;
+    const cx = Math.round((x1 + x2) / 2);
+    const cy = Math.round((y1 + y2) / 2);
+    const half = Math.floor(SEED_SAMPLE_SIZE / 2); // 2
+
+    const sx = Math.max(0, cx - half);
+    const sy = Math.max(0, cy - half);
+    const ex = Math.min(W - 1, cx + half);
+    const ey = Math.min(H - 1, cy + half);
+
+    const pixels = [];
+    for (let py = sy; py <= ey; py++) {
+      for (let px = sx; px <= ex; px++) {
+        const idx = (py * W + px) * 4;
+        if (data[idx + 3] < 10) continue;
+        const r = data[idx], g = data[idx + 1], b = data[idx + 2];
+        const lum = 0.299 * r + 0.587 * g + 0.114 * b;
+        pixels.push({ px, py, r, g, b, lum });
+      }
+    }
+    if (pixels.length === 0) return null;
+
+    // 輝度上位50%を候補として絞り込む
+    pixels.sort((a, b) => b.lum - a.lum);
+    const candidates = pixels.slice(0, Math.max(1, Math.ceil(pixels.length * 0.5)));
+
+    // Medoid: 全候補とのマンハッタン距離合計が最小のピクセルの色を内部色とする（O(n²)、n≤25固定）
+    let medoidColor = candidates[0];
+    let minTotalDist = Infinity;
+    for (const a of candidates) {
+      let dist = 0;
+      for (const b of candidates) {
+        dist += Math.abs(a.r - b.r) + Math.abs(a.g - b.g) + Math.abs(a.b - b.b);
+      }
+      if (dist < minTotalDist) { minTotalDist = dist; medoidColor = a; }
+    }
+
+    // Medoid色に最も近く、輝度 >= 40（濃いグレー・カラーテキストも除外）ピクセルをseedとする
+    let bestDist = Infinity;
+    let seed = null;
+    for (const p of candidates) {
+      if (p.lum < 40) continue;
+      const d = Math.abs(p.r - medoidColor.r) + Math.abs(p.g - medoidColor.g) + Math.abs(p.b - medoidColor.b);
+      if (d < bestDist) { bestDist = d; seed = p; }
+    }
+    // 候補内になければ全ピクセルから次点を探す
+    if (!seed) {
+      for (const p of pixels.slice(candidates.length)) {
+        if (p.lum >= 40) { seed = p; break; }
+      }
+    }
+    if (!seed) return null;
+
+    return { seedX: seed.px, seedY: seed.py, seedColor: { r: seed.r, g: seed.g, b: seed.b } };
+  }
+
+  // イテレーティブBFSでFlood Fillを実行しパネルbboxを推定する
+  // data: ImageData.data, W/H: 画像サイズ, seedX/Y: 起点座標
+  // seedColor: {r,g,b}, bubbleBboxPx: {x1,y1,x2,y2} 吹き出しのピクセルbbox（上限計算用）
+  // colorThreshold: 色距離停止閾値（省略時は FLOOD_COLOR_THRESHOLD、caption は低値を渡す）
+  // 返値: { x1, y1, x2, y2 } ピクセル座標
+  function floodFillPanel(data, W, H, seedX, seedY, seedColor, bubbleBboxPx, colorThreshold = FLOOD_COLOR_THRESHOLD) {
+    const { r: r0, g: g0, b: b0 } = seedColor;
+    const pageArea = W * H;
+    const bubbleArea = Math.max(
+      (bubbleBboxPx.x2 - bubbleBboxPx.x1) * (bubbleBboxPx.y2 - bubbleBboxPx.y1),
+      1
+    );
+    const maxFillPixels = Math.min(bubbleArea * FILL_AREA_RATIO, pageArea * PAGE_AREA_MAX_RATIO);
+    const queueSize = Math.min(Math.ceil(pageArea * 0.5), pageArea);
+
+    const visited = new Uint8Array(W * H);
+    // TypedArray キューでオブジェクト配列より高速に処理
+    const qX = new Int32Array(queueSize);
+    const qY = new Int32Array(queueSize);
+    let head = 0, tail = 0;
+
+    const enqueue = (x, y) => { if (tail < queueSize) { qX[tail] = x; qY[tail] = y; tail++; } };
+    enqueue(seedX, seedY);
+    visited[seedY * W + seedX] = 1;
+
+    let filledCount = 0;
+    let minX = seedX, maxX = seedX, minY = seedY, maxY = seedY;
+    let bndTop = false, bndBottom = false, bndLeft = false, bndRight = false;
+
+    // 安定判定用循環バッファ（BBOX_STABLE_STEPS 個の bbox 面積を保持）
+    const stableWindow = new Float32Array(BBOX_STABLE_STEPS);
+    let stableIdx = 0;
+
+    // 方向: 左・右・上・下
+    const DX = [-1, 1, 0, 0];
+    const DY = [ 0, 0,-1, 1];
+
+    let shouldStop = false;
+    while (head < tail && !shouldStop) {
+      if (filledCount >= maxFillPixels) break;
+
+      const x = qX[head], y = qY[head]; head++;
+      filledCount++;
+
+      if (x < minX) minX = x;
+      if (x > maxX) maxX = x;
+      if (y < minY) minY = y;
+      if (y > maxY) maxY = y;
+
+      // STABLE_CHECK_INTERVAL ピクセルごとに安定判定
+      if (filledCount % STABLE_CHECK_INTERVAL === 0) {
+        const bboxArea = (maxX - minX + 1) * (maxY - minY + 1);
+        const slotIdx = stableIdx % BBOX_STABLE_STEPS;
+        if (stableIdx >= BBOX_STABLE_STEPS) {
+          // 現在スロット位置には BBOX_STABLE_STEPS 周期前の値が残っている
+          const oldest = stableWindow[slotIdx];
+          const growthRate = oldest > 0 ? (bboxArea - oldest) / oldest : 1;
+          if (growthRate < BBOX_STABLE_GROWTH_MAX) {
+            const sides = (bndTop ? 1 : 0) + (bndBottom ? 1 : 0) + (bndLeft ? 1 : 0) + (bndRight ? 1 : 0);
+            if (sides >= 3) shouldStop = true;
+          }
+        }
+        stableWindow[slotIdx] = bboxArea;
+        stableIdx++;
+      }
+      if (shouldStop) break;
+
+      for (let d = 0; d < 4; d++) {
+        const nx = x + DX[d];
+        const ny = y + DY[d];
+
+        // 画像外 → 境界辺を記録してスキップ
+        if (nx < 0 || nx >= W || ny < 0 || ny >= H) {
+          if (d === 0) bndLeft = true;
+          if (d === 1) bndRight = true;
+          if (d === 2) bndTop = true;
+          if (d === 3) bndBottom = true;
+          continue;
+        }
+
+        const nIdx = ny * W + nx;
+        if (visited[nIdx]) continue;
+        visited[nIdx] = 1; // 訪問済みをマーク（重複展開防止）
+
+        const pIdx = nIdx * 4;
+        const colorDist = Math.abs(data[pIdx] - r0) + Math.abs(data[pIdx + 1] - g0) + Math.abs(data[pIdx + 2] - b0);
+        if (colorDist > colorThreshold) {
+          // 色距離超過 → 境界と判定、展開しない
+          if (d === 0) bndLeft = true;
+          if (d === 1) bndRight = true;
+          if (d === 2) bndTop = true;
+          if (d === 3) bndBottom = true;
+          continue;
+        }
+
+        enqueue(nx, ny);
+      }
+    }
+
+    return { x1: minX, y1: minY, x2: maxX, y2: maxY };
+  }
+
+  // ============================================================
+  // フェーズ2 — 同一パネルグルーピング
+  // ============================================================
+
+  // 2つのパネルbboxが同一パネルか判定する
+  // a, b: { x1, y1, x2, y2 } ピクセル座標
+  function isSamePanel(a, b) {
+    const interX1 = Math.max(a.x1, b.x1);
+    const interY1 = Math.max(a.y1, b.y1);
+    const interX2 = Math.min(a.x2, b.x2);
+    const interY2 = Math.min(a.y2, b.y2);
+    const interArea = Math.max(0, interX2 - interX1) * Math.max(0, interY2 - interY1);
+
+    const aArea = Math.max((a.x2 - a.x1) * (a.y2 - a.y1), 1);
+    const bArea = Math.max((b.x2 - b.x1) * (b.y2 - b.y1), 1);
+    const unionArea = Math.max(aArea + bArea - interArea, 1);
+    const iou = interArea / unionArea;
+
+    // Primary: IoU ≥ PANEL_IOU_THRESHOLD
+    if (iou >= PANEL_IOU_THRESHOLD) return true;
+
+    // Fallback: IoU 0.15〜PANEL_IOU_THRESHOLD のグレーゾーン複合判定
+    if (iou >= 0.15) {
+      const aCx = (a.x1 + a.x2) / 2, aCy = (a.y1 + a.y2) / 2;
+      const bCx = (b.x1 + b.x2) / 2, bCy = (b.y1 + b.y2) / 2;
+      const centerDist = Math.sqrt((aCx - bCx) ** 2 + (aCy - bCy) ** 2);
+      const minW = Math.min(a.x2 - a.x1, b.x2 - b.x1);
+      const overlapRatio = interArea / Math.min(aArea, bArea);
+      if (centerDist < minW * 0.5 && overlapRatio > 0.3) return true;
+    }
+
+    return false;
+  }
+
+  // panelBboxes 配列を同一パネル判定でグルーピングする（Union-Find）
+  // 返値: 各インデックスのグループID配列（find後の正規化済みルートID）
+  function groupBubblesByPanel(panelBboxes) {
+    const n = panelBboxes.length;
+    const parent = Array.from({ length: n }, (_, i) => i);
+
+    function find(i) {
+      while (parent[i] !== i) { parent[i] = parent[parent[i]]; i = parent[i]; }
+      return i;
+    }
+    function union(i, j) {
+      const ri = find(i), rj = find(j);
+      if (ri !== rj) parent[ri] = rj;
+    }
+
+    for (let i = 0; i < n; i++) {
+      for (let j = i + 1; j < n; j++) {
+        if (isSamePanel(panelBboxes[i], panelBboxes[j])) union(i, j);
+      }
+    }
+
+    return Array.from({ length: n }, (_, i) => find(i));
+  }
+
+  // ============================================================
+  // フェーズ3: パネルグループ計算（flood fill + グルーピング共通処理）
+  // ============================================================
+  // imageDataUrl から各 bubble の flood fill を実行してグループ化する
+  // 返値: { W, H, groups: Array<{ groupId, members, unionBboxPx, unionBboxPct }> }
+  //   members: Array<{ item, bubbleBboxPx, seedX, seedY, seedColor, panelBboxPx }>
+  //   unionBboxPct: { left, top, width, height } — % 単位（overlayContainer の % 位置指定に直結）
+  async function computePanelGroups(imageDataUrl, translations) {
+    if (!imageDataUrl || !translations || translations.length === 0) return null;
+
+    let img;
+    try {
+      img = await new Promise((resolve, reject) => {
+        const i = new Image();
+        i.onload = () => resolve(i);
+        i.onerror = reject;
+        i.src = imageDataUrl;
+      });
+    } catch { return null; }
+
+    const W = img.naturalWidth;
+    const H = img.naturalHeight;
+    if (W === 0 || H === 0) return null;
+
+    const srcCanvas = document.createElement('canvas');
+    srcCanvas.width = W; srcCanvas.height = H;
+    const srcCtx = srcCanvas.getContext('2d', { willReadFrequently: true });
+    srcCtx.drawImage(img, 0, 0);
+    const data = srcCtx.getImageData(0, 0, W, H).data;
+
+    const validItems = translations.filter(item =>
+      item.bbox && item.type !== 'sfx' &&
+      isFinite(item.bbox.top) && isFinite(item.bbox.left) &&
+      isFinite(item.bbox.width) && isFinite(item.bbox.height) &&
+      item.bbox.width > 0 && item.bbox.height > 0
+    );
+
+    // Flood fill 結果を収集
+    const allMembers = [];
+    for (const item of validItems) {
+      const bx1 = Math.round((item.bbox.left / 100) * W);
+      const by1 = Math.round((item.bbox.top / 100) * H);
+      const bx2 = Math.round(((item.bbox.left + item.bbox.width) / 100) * W);
+      const by2 = Math.round(((item.bbox.top + item.bbox.height) / 100) * H);
+      if (bx2 <= bx1 || by2 <= by1) continue;
+
+      const bubbleBboxPx = { x1: bx1, y1: by1, x2: bx2, y2: by2 };
+      const seedResult = findFloodSeed(data, W, H, bubbleBboxPx);
+      if (!seedResult) continue;
+
+      const { seedX, seedY, seedColor } = seedResult;
+      const threshold = item.type === 'caption' ? CAPTION_FLOOD_COLOR_THRESHOLD : FLOOD_COLOR_THRESHOLD;
+      const panelBboxPx = floodFillPanel(data, W, H, seedX, seedY, seedColor, bubbleBboxPx, threshold);
+      allMembers.push({ item, bubbleBboxPx, seedX, seedY, seedColor, panelBboxPx });
+    }
+
+    if (allMembers.length === 0) return { W, H, groups: [] };
+
+    // グルーピング（Union-Find）
+    const rawGroupIds = groupBubblesByPanel(allMembers.map(m => m.panelBboxPx));
+
+    // gid → 連番カラーインデックス + グループデータ集約
+    const groupMap = new Map();
+    allMembers.forEach((m, i) => {
+      const gid = rawGroupIds[i];
+      if (!groupMap.has(gid)) {
+        groupMap.set(gid, { members: [], unionBboxPx: { ...m.panelBboxPx } });
+      }
+      const g = groupMap.get(gid);
+      g.members.push(m);
+      g.unionBboxPx.x1 = Math.min(g.unionBboxPx.x1, m.panelBboxPx.x1);
+      g.unionBboxPx.y1 = Math.min(g.unionBboxPx.y1, m.panelBboxPx.y1);
+      g.unionBboxPx.x2 = Math.max(g.unionBboxPx.x2, m.panelBboxPx.x2);
+      g.unionBboxPx.y2 = Math.max(g.unionBboxPx.y2, m.panelBboxPx.y2);
+    });
+
+    let colorIdx = 0;
+    const groups = [];
+    for (const g of groupMap.values()) {
+      const { x1, y1, x2, y2 } = g.unionBboxPx;
+      groups.push({
+        groupId: colorIdx++,
+        members: g.members,
+        unionBboxPx: g.unionBboxPx,
+        unionBboxPct: {
+          left:   x1 / W * 100,
+          top:    y1 / H * 100,
+          width:  (x2 - x1) / W * 100,
+          height: (y2 - y1) / H * 100,
+        },
+      });
+    }
+
+    return { W, H, groups };
+  }
+
+  // ============================================================
+  // パネルbboxデバッグ可視化（フェーズ2: グループ色分け）
+  // overlayContainer上にキャンバスを追加してseed・bbox・色見本を表示
+  // ============================================================
+  async function showPanelDebug(imageDataUrl, translations) {
+    clearPanelDebug();
+    if (!overlayContainer || !imageDataUrl || !translations || translations.length === 0) return;
+
+    // flood fill + グルーピング（キャッシュがあれば再利用）
+    const pgResult = _lastPanelGroups || await computePanelGroups(imageDataUrl, translations);
+    if (!pgResult || pgResult.groups.length === 0) return;
+
+    const { W, H, groups } = pgResult;
+
+    // デバッグキャンバスを overlayContainer に合わせて生成
+    const cW = overlayContainer.clientWidth;
+    const cH = overlayContainer.clientHeight;
+    if (cW === 0 || cH === 0) return;
+
+    _debugCanvas = document.createElement('canvas');
+    _debugCanvas.width = cW;
+    _debugCanvas.height = cH;
+    Object.assign(_debugCanvas.style, {
+      position: 'absolute',
+      top: '0', left: '0',
+      width: '100%', height: '100%',
+      pointerEvents: 'none',
+      zIndex: '1000',
+    });
+    const ctx = _debugCanvas.getContext('2d');
+
+    // 画像ピクセル → コンテナCSSpx のスケール
+    const scaleX = cW / W;
+    const scaleY = cH / H;
+
+    // グループunion bbox を色付き塗り + 枠線で描画（背面）
+    for (const group of groups) {
+      const [cr, cg, cb] = GROUP_COLORS[group.groupId % GROUP_COLORS.length];
+      const { x1, y1, x2, y2 } = group.unionBboxPx;
+      ctx.save();
+      ctx.fillStyle = `rgba(${cr},${cg},${cb},0.15)`;
+      ctx.fillRect(x1 * scaleX, y1 * scaleY, (x2 - x1) * scaleX, (y2 - y1) * scaleY);
+      ctx.strokeStyle = `rgba(${cr},${cg},${cb},0.75)`;
+      ctx.lineWidth = 2.5;
+      ctx.strokeRect(x1 * scaleX, y1 * scaleY, (x2 - x1) * scaleX, (y2 - y1) * scaleY);
+      ctx.restore();
+    }
+
+    // bubble bbox・seed・スウォッチをグループ色で描画（前面）
+    for (const group of groups) {
+      const [cr, cg, cb] = GROUP_COLORS[group.groupId % GROUP_COLORS.length];
+      for (const m of group.members) {
+        const { bubbleBboxPx: bb, seedX, seedY, seedColor } = m;
+
+        // 吹き出しbbox（グループ色・破線）
+        ctx.save();
+        ctx.strokeStyle = `rgba(${cr},${cg},${cb},0.9)`;
+        ctx.lineWidth = 1.5;
+        ctx.setLineDash([4, 4]);
+        ctx.strokeRect(bb.x1 * scaleX, bb.y1 * scaleY, (bb.x2 - bb.x1) * scaleX, (bb.y2 - bb.y1) * scaleY);
+        ctx.restore();
+
+        // seed（グループ色の点 + 黒縁）
+        const sx = seedX * scaleX;
+        const sy = seedY * scaleY;
+        ctx.save();
+        ctx.beginPath();
+        ctx.arc(sx, sy, 4, 0, Math.PI * 2);
+        ctx.fillStyle = `rgba(${cr},${cg},${cb},1)`;
+        ctx.fill();
+        ctx.strokeStyle = 'rgba(0,0,0,0.8)';
+        ctx.lineWidth = 1;
+        ctx.stroke();
+        ctx.restore();
+
+        // 内部色スウォッチ（seed 右上 12×12px）
+        const swX = Math.min(sx + 8, cW - 14);
+        const swY = Math.max(sy - 20, 2);
+        ctx.save();
+        ctx.fillStyle = `rgb(${seedColor.r},${seedColor.g},${seedColor.b})`;
+        ctx.fillRect(swX, swY, 12, 12);
+        ctx.strokeStyle = 'rgba(0,0,0,0.7)';
+        ctx.lineWidth = 1;
+        ctx.strokeRect(swX, swY, 12, 12);
+        ctx.restore();
+      }
+    }
+
+    overlayContainer.appendChild(_debugCanvas);
+  }
+
+  function clearPanelDebug() {
+    if (_debugCanvas) {
+      if (_debugCanvas.parentNode) _debugCanvas.remove();
+      _debugCanvas = null;
+    }
+  }
+
+  // ============================================================
+  // フェーズ3: パネル再翻訳ボタンを overlayContainer に追加
+  // mousemove で各パネル bbox 内にカーソルがあるか判定して表示/非表示を切り替える
+  // ============================================================
+  function addPanelRetranslateButtons(pgResult) {
+    if (!overlayContainer || !pgResult || pgResult.groups.length === 0) {
+      console.log('[doug] addPanelRetranslateButtons early return:', { hasContainer: !!overlayContainer, hasPgResult: !!pgResult, groupsLen: pgResult?.groups?.length });
+      return;
+    }
+    console.log('[doug] addPanelRetranslateButtons: adding buttons for', pgResult.groups.length, 'groups');
+
+    const btns = [];
+
+    for (const group of pgResult.groups) {
+      const { left, top, width, height } = group.unionBboxPct;
+      // ホバー検出用（PANEL_HOVER_EXPAND分拡張、0〜100にクランプ）
+      const hLeft   = Math.max(0,   left - PANEL_HOVER_EXPAND);
+      const hTop    = Math.max(0,   top  - PANEL_HOVER_EXPAND);
+      const hRight  = Math.min(100, left + width  + PANEL_HOVER_EXPAND);
+      const hBottom = Math.min(100, top  + height + PANEL_HOVER_EXPAND);
+
+      // ボタン（位置は mousemove で動的に設定）
+      const btn = document.createElement('button');
+      btn.className = 'mut-panel-retranslate-btn';
+      btn.title = 'このパネルを再翻訳';
+      btn.dataset.groupId = String(group.groupId);
+      // 初期位置はオフスクリーン（mousemove 前に見えないようにするため）
+      btn.style.left = '-100px';
+      btn.style.top  = '-100px';
+      btn.insertAdjacentHTML('afterbegin',
+        '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">' +
+        '<path d="M23 4v6h-6"/>' +
+        '<path d="M1 20v-6h6"/>' +
+        '<path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>' +
+        '</svg>');
+
+      // TODO Phase 4: クリック時にパネルをcropして再翻訳
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        showNotification('パネル再翻訳（フェーズ4で実装予定）', 'info');
+      });
+
+      overlayContainer.appendChild(btn);
+      // bbox 中心座標（距離比較用）
+      const cx = left + width  / 2;
+      const cy = top  + height / 2;
+      btns.push({ btn, hbox: { left: hLeft, top: hTop, right: hRight, bottom: hBottom }, cx, cy });
+    }
+
+    // マウス位置でボタン表示/非表示
+    // カーソルがパネル hbox に入った瞬間の座標にボタンを固定（sticky position）
+    let currentGroupId = null;
+    const panelMoveHandler = (e) => {
+      if (!overlayContainer) return;
+      const cr = overlayContainer.getBoundingClientRect();
+      if (cr.width === 0 || cr.height === 0) return;
+      const relX = (e.clientX - cr.left) / cr.width  * 100;
+      const relY = (e.clientY - cr.top)  / cr.height * 100;
+
+      // hbox 内にあるパネルのうち bbox 中心が最も近い1つを選択
+      let bestEntry = null;
+      let bestDist  = Infinity;
+      for (const entry of btns) {
+        const { hbox, cx, cy } = entry;
+        if (relX >= hbox.left && relX <= hbox.right &&
+            relY >= hbox.top  && relY <= hbox.bottom) {
+          const d = (relX - cx) ** 2 + (relY - cy) ** 2;
+          if (d < bestDist) { bestDist = d; bestEntry = entry; }
+        }
+      }
+
+      const newGid = bestEntry ? bestEntry.btn.dataset.groupId : null;
+      if (newGid !== currentGroupId) {
+        currentGroupId = newGid;
+        for (const { btn } of btns) btn.classList.remove('mut-panel-btn-visible');
+        if (bestEntry) {
+          // 吹き出しクラスターの中心に固定配置（カーソル位置に依存しない）
+          bestEntry.btn.style.left      = bestEntry.cx + '%';
+          bestEntry.btn.style.top       = bestEntry.cy + '%';
+          bestEntry.btn.style.transform = 'translate(-50%, -50%)';
+          bestEntry.btn.classList.add('mut-panel-btn-visible');
+        }
+      }
+    };
+    document.addEventListener('mousemove', panelMoveHandler, { passive: true });
+
+    // クリーンアップを既存の _cleanup に合成
+    const prevCleanup = overlayContainer._cleanup;
+    overlayContainer._cleanup = () => {
+      prevCleanup?.();
+      document.removeEventListener('mousemove', panelMoveHandler);
+    };
+  }
+
   function renderOverlays(targetEl, translations, adjustments = {}, onAdjusted = null, capturedRect = null) {
     if (!targetEl || !translations) return;
     clearOverlays();
@@ -904,6 +1484,7 @@ JSON配列のみ返してください:
     const expandRateX = 0.20; // 左右20%拡大
     const expandRateY = 0.35; // 上下35%拡大（日本語は縦に長くなりやすいため多めに確保）
     const layoutItems = translations
+      .map((item, origIndex) => ({ ...item, origIndex }))
       .filter(item => item.bbox && item.bbox.top != null && item.bbox.left != null && item.type !== 'sfx')
       .map(item => {
         const expandX = (item.bbox.width || 5) * expandRateX;
@@ -958,6 +1539,7 @@ JSON配列のみ返してください:
       // type を英数字・ハイフンのみに制限してクラス名インジェクションを防ぐ
       const safeType = (item.type || 'speech').replace(/[^a-z0-9-]/gi, '') || 'speech';
       overlay.className = `mut-overlay mut-type-${safeType}`;
+      overlay.dataset.index = item.origIndex;  // 再翻訳時の特定用
       const { top, left, width, height } = item.layout;
       Object.assign(overlay.style, {
         position: 'absolute',
@@ -1205,6 +1787,8 @@ JSON配列のみ返してください:
   }
 
   function clearOverlays() {
+    clearPanelDebug();
+    _lastPanelGroups = null;
     if (overlayContainer) {
       if (overlayContainer._cleanup) overlayContainer._cleanup();
       overlayContainer.remove();
@@ -1212,8 +1796,10 @@ JSON配列のみ返してください:
     }
     const toggleBtn = document.getElementById('mut-btn-toggle');
     const clearBtn = document.getElementById('mut-btn-clear');
+    const debugBtn = document.getElementById('mut-btn-debug');
     if (toggleBtn) toggleBtn.style.display = 'none';
     if (clearBtn) clearBtn.style.display = 'none';
+    if (debugBtn) debugBtn.style.display = 'none';
   }
 
   function toggleAutoTranslate() {
