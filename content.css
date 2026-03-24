@@ -126,6 +126,12 @@
   white-space: pre-wrap;
   font-size: 12px;
   box-sizing: border-box;
+  transition: background-color 1s ease;
+}
+
+/* パネル再翻訳ハイライト */
+.mut-overlay.mut-retranslated .mut-overlay-text {
+  background-color: rgba(255, 230, 0, 0.35) !important;
 }
 
 /* セリフ（吹き出し） */
@@ -283,5 +289,31 @@
   pointer-events: auto;
 }
 .mut-reload-btn:hover {
+  background: rgba(26, 26, 46, 1);
+}
+
+/* パネル再翻訳ボタン（overlayContainer内に絶対配置・mousemoveで表示制御） */
+.mut-panel-retranslate-btn {
+  position: absolute;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  border: none;
+  background: rgba(26, 26, 46, 0.85);
+  color: #fff;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  transition: opacity 0.2s, background 0.15s;
+  pointer-events: none;
+  z-index: 2;
+}
+.mut-panel-retranslate-btn.mut-panel-btn-visible {
+  opacity: 1;
+  pointer-events: auto;
+}
+.mut-panel-retranslate-btn:hover {
   background: rgba(26, 26, 46, 1);
 }

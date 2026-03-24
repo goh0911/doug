@@ -1540,6 +1540,71 @@ JSON配列のみ返してください:
     return union <= 0 ? 0 : inter / union;
   }
 
+  // changedIndices のオーバーレイに黄色ハイライトを付与し、3秒後フェードアウト
+  // 新規追加分（既存 DOM に対応する data-index がない）はオーバーレイ要素を生成して追加
+  function addRetranslatedOverlays(container, translations, changedIndices) {
+    if (!container || !translations || !changedIndices || changedIndices.size === 0) return;
+
+    for (const idx of changedIndices) {
+      const item = translations[idx];
+      if (!item || !item.bbox) continue;
+
+      // 既存 DOM 要素を data-index で探す
+      const existing = container.querySelector(`.mut-overlay[data-index="${idx}"]`);
+
+      if (existing) {
+        // 置き換え対象: テキストを更新してハイライト
+        const textEl = existing.querySelector('.mut-overlay-text');
+        const origEl = existing.querySelector('.mut-overlay-original');
+        if (textEl) textEl.textContent = item.translated;
+        if (origEl) origEl.textContent = item.original;
+        existing.classList.add('mut-retranslated');
+        setTimeout(() => {
+          existing.classList.remove('mut-retranslated');
+        }, 3000);
+      } else {
+        // 新規追加: オーバーレイ要素を生成（renderOverlays と同じスタイル適用）
+        const overlay = document.createElement('div');
+        const safeType = (item.type || 'speech').replace(/[^a-z0-9-]/gi, '') || 'speech';
+        overlay.className = `mut-overlay mut-type-${safeType} mut-retranslated`;
+        overlay.dataset.index = idx;
+        const { left, top, width, height } = item.bbox;
+        Object.assign(overlay.style, {
+          position: 'absolute',
+          top:    top    + '%',
+          left:   left   + '%',
+          width:  width  + '%',
+          height: height + '%',
+          pointerEvents: 'auto',
+        });
+        const textEl = document.createElement('div');
+        textEl.className = 'mut-overlay-text';
+        textEl.textContent = item.translated;
+        // AI が返す background / border を適用（sanitizeCssValue は content.js 内で定義済み）
+        const safeBg     = sanitizeCssValue(item.background);
+        const safeBorder = sanitizeCssValue(item.border);
+        if (safeBg) {
+          textEl.style.background = safeBg;
+          const contrastColor = getContrastColor(safeBg);
+          if (contrastColor) textEl.style.color = contrastColor;
+          const borderColor = safeBorder || darkenColor(safeBg);
+          if (borderColor) textEl.style.border = `2px solid ${borderColor}`;
+        } else if (safeBorder) {
+          textEl.style.border = `2px solid ${safeBorder}`;
+        }
+        overlay.appendChild(textEl);
+        const origEl = document.createElement('div');
+        origEl.className = 'mut-overlay-original';
+        origEl.textContent = item.original;
+        overlay.appendChild(origEl);
+        container.appendChild(overlay);
+        setTimeout(() => {
+          overlay.classList.remove('mut-retranslated');
+        }, 3000);
+      }
+    }
+  }
+
   function renderOverlays(targetEl, translations, adjustments = {}, onAdjusted = null, capturedRect = null) {
     if (!targetEl || !translations) return;
     clearOverlays();
