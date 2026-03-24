@@ -1605,6 +1605,66 @@ JSON配列のみ返してください:
     }
   }
 
+  // パネル再翻訳のオーケストレーター
+  // group: computePanelGroups の groups[] の1要素
+  // W, H: フル画像のピクセルサイズ（_lastPanelGroups.W / H）
+  async function retranslatePanel(group, W, H) {
+    if (isTranslating) return;
+    if (!_lastImageDataUrl || !_lastTranslations) {
+      showNotification('翻訳データがありません。先にページ全体を翻訳してください。', 'warn');
+      return;
+    }
+
+    isTranslating = true;
+    try {
+      // 1. crop（Promise を返すため await が必要）
+      const cropResult = await cropPanelImage(_lastImageDataUrl, group, W, H);
+      if (!cropResult) {
+        showNotification('パネルの切り抜きに失敗しました', 'error');
+        return;
+      }
+      const { dataUrl: cropDataUrl, cropBox } = cropResult;
+
+      // 2. 翻訳（既存パイプライン流用、キャッシュ無効）
+      const response = await translateImage(cropDataUrl, null, true);
+      if (!response || response.error) {
+        showNotification(response?.error || '翻訳応答がありません', 'error');
+        return;
+      }
+
+      // 3. 0件チェック
+      const rawItems = response.translations;
+      if (!rawItems || rawItems.length === 0) {
+        showNotification('このパネルにはテキストが見つかりませんでした', 'info');
+        return;
+      }
+
+      // 4. 座標変換（crop % → フルページ %）
+      const incoming = rawItems.map(item => ({
+        ...item,
+        bbox: item.bbox ? transformBboxToFullPage(item.bbox, cropBox, W, H) : item.bbox,
+      }));
+
+      // 5. マージ
+      const { translations: merged, changedIndices } = mergeTranslations(_lastTranslations, incoming);
+
+      // 6. 状態更新
+      _lastTranslations = merged;
+
+      // 7. オーバーレイ追加・更新
+      if (overlayContainer) {
+        addRetranslatedOverlays(overlayContainer, merged, changedIndices);
+      }
+
+      // 8. 通知
+      showNotification(`${changedIndices.size}件のテキストを追加しました`, 'success');
+    } catch (err) {
+      showNotification('翻訳に失敗: ' + err.message, 'error');
+    } finally {
+      isTranslating = false;
+    }
+  }
+
   function renderOverlays(targetEl, translations, adjustments = {}, onAdjusted = null, capturedRect = null) {
     if (!targetEl || !translations) return;
     clearOverlays();
