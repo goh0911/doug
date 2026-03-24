@@ -1557,9 +1557,16 @@ JSON配列のみ返してください:
         const origEl = existing.querySelector('.mut-overlay-original');
         if (textEl) textEl.textContent = item.translated;
         if (origEl) origEl.textContent = item.original;
+        // 即時黄色表示（transition なし）
         existing.classList.add('mut-retranslated');
+        // 3秒後: transition を追加してからクラスを削除（フェードアウト）
         setTimeout(() => {
+          if (textEl) textEl.style.transition = 'background-color 1s ease';
           existing.classList.remove('mut-retranslated');
+          // transition 完了後にインラインスタイルをクリーンアップ
+          setTimeout(() => {
+            if (textEl) textEl.style.transition = '';
+          }, 1100);
         }, 3000);
       } else {
         // 新規追加: オーバーレイ要素を生成（renderOverlays と同じスタイル適用）
@@ -1598,7 +1605,11 @@ JSON配列のみ返してください:
         overlay.appendChild(origEl);
         container.appendChild(overlay);
         setTimeout(() => {
+          if (textEl) textEl.style.transition = 'background-color 1s ease';
           overlay.classList.remove('mut-retranslated');
+          setTimeout(() => {
+            if (textEl) textEl.style.transition = '';
+          }, 1100);
         }, 3000);
       }
     }
