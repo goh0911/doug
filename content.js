@@ -1457,6 +1457,89 @@ JSON配列のみ返してください:
     };
   }
 
+  // ============================================================
+  // フェーズ4: パネル crop / 座標変換 / マージ / 再翻訳
+  // ============================================================
+
+  // パネル bbox を PANEL_CROP_PADDING 分拡張して canvas で crop する（非同期）
+  // img.onload を待ってから drawImage する必要があるため Promise を返す
+  // 返値: Promise<{ dataUrl: string, cropBox: {x1,y1,x2,y2} } | null>
+  function cropPanelImage(imageDataUrl, group, W, H) {
+    return new Promise((resolve) => {
+      if (!imageDataUrl || !group || !group.unionBboxPx) { resolve(null); return; }
+      const { x1, y1, x2, y2 } = group.unionBboxPx;
+      const panelW = x2 - x1;
+      const panelH = y2 - y1;
+      const padX = panelW * PANEL_CROP_PADDING;
+      const padY = panelH * PANEL_CROP_PADDING;
+      const cropX1 = Math.max(0, Math.round(x1 - padX));
+      const cropY1 = Math.max(0, Math.round(y1 - padY));
+      const cropX2 = Math.min(W, Math.round(x2 + padX));
+      const cropY2 = Math.min(H, Math.round(y2 + padY));
+      const cropW  = cropX2 - cropX1;
+      const cropH  = cropY2 - cropY1;
+      if (cropW <= 0 || cropH <= 0) { resolve(null); return; }
+
+      const img = new Image();
+      img.onload = () => {
+        try {
+          const canvas = document.createElement('canvas');
+          canvas.width  = cropW;
+          canvas.height = cropH;
+          canvas.getContext('2d').drawImage(img, cropX1, cropY1, cropW, cropH, 0, 0, cropW, cropH);
+          resolve({ dataUrl: canvas.toDataURL('image/jpeg', 0.92), cropBox: { x1: cropX1, y1: cropY1, x2: cropX2, y2: cropY2 } });
+        } catch { resolve(null); }
+      };
+      img.onerror = () => resolve(null);
+      img.src = imageDataUrl;
+    });
+  }
+
+  // transformBboxToFullPage — utils/panel-utils.js と同一内容（IIFE制約のためコピー）
+  // utils/panel-utils.js 側を変更した場合はこちらも必ず同期すること
+  function transformBboxToFullPage(cropBbox, cropBox, W, H) {
+    const cropW = cropBox.x2 - cropBox.x1;
+    const cropH = cropBox.y2 - cropBox.y1;
+    return {
+      left:   (cropBox.x1 + cropBbox.left   / 100 * cropW) / W * 100,
+      top:    (cropBox.y1 + cropBbox.top    / 100 * cropH) / H * 100,
+      width:  cropBbox.width  / 100 * cropW / W * 100,
+      height: cropBbox.height / 100 * cropH / H * 100,
+    };
+  }
+
+  // mergeTranslations / calcIou — utils/panel-utils.js と同一内容（IIFE制約のためコピー）
+  function mergeTranslations(existing, incoming) {
+    const result = existing.slice();
+    const changedIndices = new Set();
+    for (const newItem of incoming) {
+      if (!newItem.bbox) { result.push(newItem); changedIndices.add(result.length - 1); continue; }
+      let bestIdx = -1, bestIou = 0;
+      for (let i = 0; i < result.length; i++) {
+        if (!result[i].bbox) continue;
+        const iou = calcIou(result[i].bbox, newItem.bbox);
+        if (iou >= 0.3 && iou > bestIou) { bestIou = iou; bestIdx = i; }
+      }
+      if (bestIdx >= 0) {
+        result[bestIdx] = newItem; changedIndices.add(bestIdx);
+      } else {
+        result.push(newItem); changedIndices.add(result.length - 1);
+      }
+    }
+    return { translations: result, changedIndices };
+  }
+
+  function calcIou(a, b) {
+    const ax2 = a.left + a.width,  ay2 = a.top + a.height;
+    const bx2 = b.left + b.width,  by2 = b.top + b.height;
+    const ix1 = Math.max(a.left, b.left), iy1 = Math.max(a.top, b.top);
+    const ix2 = Math.min(ax2, bx2),       iy2 = Math.min(ay2, by2);
+    const inter = Math.max(0, ix2 - ix1) * Math.max(0, iy2 - iy1);
+    if (inter === 0) return 0;
+    const union = a.width * a.height + b.width * b.height - inter;
+    return union <= 0 ? 0 : inter / union;
+  }
+
   function renderOverlays(targetEl, translations, adjustments = {}, onAdjusted = null, capturedRect = null) {
     if (!targetEl || !translations) return;
     clearOverlays();
