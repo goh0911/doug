@@ -12,6 +12,11 @@ import {
 import { handleImageTranslation } from './translate.js';
 import { handlePreloadQueue, resumePreloadQueue } from './preload.js';
 import { detectSeries } from './utils/series-detect.js';
+import {
+  getSeries, listSeries, recordSeriesTranslation, deleteSeries,
+  updateSeriesField, addGlossaryEntry, removeGlossaryEntry, getStorageUsageInfo,
+} from './series-store.js';
+import { derivePathPrefix } from './utils/url-pattern.js';
 
 // ============================================================
 // マイグレーション: sync → local への移行
@@ -137,6 +142,92 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       // whitelist 通過後にのみ実行（isWebContentScript チェック済み）
       try {
         const result = await detectSeries(message.payload);
+        sendResponse(result);
+      } catch (err) {
+        sendResponse(null);
+      }
+      return;
+    }
+
+    if (message.type === 'RECORD_SERIES_TRANSLATION') {
+      try {
+        const payload = message.payload;
+        // background.js 側で derivePathPrefix(url) を処理する
+        const pathPrefix = derivePathPrefix(payload.url);
+        const result = await recordSeriesTranslation({ ...payload, pathPrefix });
+        sendResponse(result);
+      } catch (err) {
+        sendResponse(null);
+      }
+      return;
+    }
+
+    if (message.type === 'GET_SERIES') {
+      try {
+        const result = await getSeries(message.payload.seriesId);
+        sendResponse(result);
+      } catch (err) {
+        sendResponse(null);
+      }
+      return;
+    }
+
+    if (message.type === 'LIST_SERIES') {
+      try {
+        const result = await listSeries();
+        sendResponse(result);
+      } catch (err) {
+        sendResponse([]);
+      }
+      return;
+    }
+
+    if (message.type === 'UPDATE_SERIES_FIELD') {
+      try {
+        const { seriesId, fieldPath, value } = message.payload;
+        const result = await updateSeriesField(seriesId, fieldPath, value);
+        sendResponse(result);
+      } catch (err) {
+        sendResponse(false);
+      }
+      return;
+    }
+
+    if (message.type === 'ADD_GLOSSARY_ENTRY') {
+      try {
+        const { seriesId, targetLang, original, translated } = message.payload;
+        const result = await addGlossaryEntry(seriesId, targetLang, original, translated);
+        sendResponse(result);
+      } catch (err) {
+        sendResponse(false);
+      }
+      return;
+    }
+
+    if (message.type === 'REMOVE_GLOSSARY_ENTRY') {
+      try {
+        const { seriesId, targetLang, original } = message.payload;
+        await removeGlossaryEntry(seriesId, targetLang, original);
+        sendResponse({ ok: true });
+      } catch (err) {
+        sendResponse({ error: err.message });
+      }
+      return;
+    }
+
+    if (message.type === 'DELETE_SERIES') {
+      try {
+        await deleteSeries(message.payload.seriesId);
+        sendResponse({ ok: true });
+      } catch (err) {
+        sendResponse({ error: err.message });
+      }
+      return;
+    }
+
+    if (message.type === 'GET_STORAGE_USAGE') {
+      try {
+        const result = await getStorageUsageInfo();
         sendResponse(result);
       } catch (err) {
         sendResponse(null);
