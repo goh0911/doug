@@ -626,6 +626,19 @@ JSON配列のみ返してください:
         else console.log('[doug] overlayContainer is null, skipping addPanelRetranslateButtons');
       }).catch((err) => { console.log('[doug] computePanelGroups error:', err); });
 
+      // v2 Phase 2A: 翻訳成功時にシリーズを記録（seriesInfo が検出済みの場合のみ）
+      if (seriesInfo && seriesInfo.seriesId) {
+        chrome.runtime.sendMessage({
+          type: 'RECORD_SERIES_TRANSLATION',
+          payload: {
+            seriesId: seriesInfo.seriesId,
+            name: seriesInfo.series,
+            detectionSource: seriesInfo.source,
+            url: location.href,
+          },
+        }).catch(() => { /* 記録失敗は翻訳結果に影響させない */ });
+      }
+
       const message = response.fromCache
         ? `${response.translations.length}件のテキストを表示しました（キャッシュ）`
         : `${response.translations.length}件のテキストを翻訳しました`;
