@@ -15,21 +15,31 @@ Phase 1 で検出したシリーズを `chrome.storage.local` に永続化し、
 
 ---
 
-## 0. 実装着手前のゲート（実測必須）
+## 0. 実装着手前のゲート（実測結果）
 
-Phase 2A 着手前に以下を実施する：
+Phase 2A 着手前に `tools/measure-storage.html` で実測を実施した。
 
-- [ ] **ストレージサイズ実測**: dummy で 100 シリーズ × 各 50 用語（各エントリ平均 30 字 + 訳語 15 字）を生成し `chrome.storage.local` に保存、`getBytesInUse(null)` を測定
-- [ ] 1 シリーズあたりの実バイト数 (`avgBytesPerSeries = totalBytes / 100`) を確定
+### 実測結果（2026-05-27）
 
-### 合格基準（定量）
+| 項目 | 値 |
+|---|---|
+| 測定対象 | 100 シリーズ × 各 50 用語（原文 30 字 + 訳 15 字平均） |
+| 総使用量 (dummy) | 832.3 KB |
+| 1 シリーズあたり平均 | **8.32 KB** |
+| `chrome.storage.local.QUOTA_BYTES` | **10 MB**（10,485,760 bytes）※当初設計の「5 MB」は誤り |
+| dummy / クォータ | 8.13 %（5〜10% 帯） |
+| 推定収容数（クォータ 80% まで） | **984 シリーズ** |
+| 合格判定 | **合格基準B**（5〜10%） |
 
-- **100 シリーズ・各 50 用語の総使用量が 5 MB の 5% 以下**（= 256 KB 以下）→ そのまま 1200 シリーズ仮定を維持して着手 GO
-- 5〜10% → 警告閾値を `avgBytesPerSeries × 800` に設定して着手 GO
-- 10% 超 → 1 シリーズあたりが想定より重い。閾値を `avgBytesPerSeries × 500` 以下に下げて着手 GO（収容数縮小を許容）
-- いずれかの集計で書き込みエラー or 計測不能なら 2A 着手を保留して原因調査
+### 確定した閾値
 
-ゲート未達のまま 2A を着手しない。
+- `WARN_THRESHOLD = 6.5 MB`（クォータの 65%、≈ 800 シリーズ相当）
+- `ARCHIVE_THRESHOLD = 7.32 MB`（クォータの 70%、≈ 900 シリーズ相当）
+- `MAX_QUOTA = 10 MB`（実測クォータ、`QUOTA_BYTES` 直接参照）
+
+### 補足
+
+8.32 KB/series は **50 用語フル積載時の最大ケース**。実運用では用語数が少ないシリーズが多数派になると見込まれ、平均はこれより小さくなる見通し（数 KB 〜 5 KB 程度）。984 シリーズは保守的な下限見積もり。
 
 ---
 
@@ -211,11 +221,13 @@ Service Worker が writeQueue 動作中に終了するリスクは：
 
 ### 3.5 LRU 容量管理
 
-実測ゲート（§0）で確定した閾値に基づく：
+§0 の実測結果に基づき確定：
 
-- **WARN_THRESHOLD**（仮 4 MB）超過 → `console.warn` + 設定ページ警告バナー（2B 実装）
-- **ARCHIVE_THRESHOLD**（仮 4.5 MB）超過 → `lastVisitedAt` 最古から自動削除
-- **MAX**（5 MB）到達時 → `recordSeriesTranslation` は静かに null を返し、ユーザーには既存翻訳機能で notification を出す（「シリーズが記録できませんでした。古いシリーズを削除してください」）
+- **WARN_THRESHOLD = 6.5 MB**（クォータ 65%、約 800 シリーズ相当）超過 → `console.warn` + 設定ページ警告バナー（2B 実装）
+- **ARCHIVE_THRESHOLD = 7.32 MB**（クォータ 70%、約 900 シリーズ相当）超過 → `lastVisitedAt` 最古から自動削除
+- **MAX_QUOTA = `chrome.storage.local.QUOTA_BYTES`**（実測 10 MB） 到達時 → `recordSeriesTranslation` は静かに null を返し、ユーザーには既存翻訳機能で notification を出す（「シリーズが記録できませんでした。古いシリーズを削除してください」）
+
+実装上は `chrome.storage.local.QUOTA_BYTES` を直接参照し、ハードコードしない。
 
 ### 3.6 background.js のメッセージハンドラ追加
 
