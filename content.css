@@ -316,3 +316,33 @@
 .mut-panel-retranslate-btn:hover {
   background: rgba(26, 26, 46, 1);
 }
+
+/* 吹き出し単体の再翻訳ボタン（オーバーレイホバー時のみ右上に表示） */
+.mut-bubble-retranslate-btn {
+  position: absolute;
+  top: -8px;
+  right: -8px;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border-radius: 50%;
+  border: none;
+  background: rgba(26, 26, 46, 0.85);
+  color: #fff;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  transition: opacity 0.15s, background 0.15s;
+  pointer-events: none;
+  z-index: 2;
+}
+.mut-overlay:hover .mut-bubble-retranslate-btn {
+  opacity: 0.9;
+  pointer-events: auto;
+}
+.mut-bubble-retranslate-btn:hover {
+  opacity: 1;
+  background: rgba(26, 26, 46, 1);
+}

@@ -27,6 +27,7 @@
   const BBOX_STABLE_GROWTH_MAX = 0.01; // bbox面積増加率の安定閾値（1%）
   /* eslint-disable-next-line no-unused-vars */
   const PANEL_CROP_PADDING     = 0.07; // crop時のパディング率（フェーズ4で使用）
+  const BUBBLE_CROP_PADDING    = 0.15; // 吹き出し単体crop時のパディング率（個別再翻訳）
   const PANEL_HOVER_EXPAND     = 15;   // パネルホバー検出を bbox から ±N% 拡張（吹き出し bbox が小さい場合の補正）
   const SEED_SAMPLE_SIZE       = 5;    // 起点サンプル固定サイズ（5×5）
   const STABLE_CHECK_INTERVAL  = 100;  // 安定判定チェック間隔（ピクセル数、大パネルの早期終了防止で50→100）
@@ -1603,6 +1604,8 @@ JSON配列のみ返してください:
         origEl.className = 'mut-overlay-original';
         origEl.textContent = item.original;
         overlay.appendChild(origEl);
+        // 吹き出し単体再翻訳ボタン
+        overlay.appendChild(createBubbleRetranslateButton(idx));
         container.appendChild(overlay);
         setTimeout(() => {
           if (textEl) textEl.style.transition = 'background-color 1s ease';
@@ -1673,6 +1676,137 @@ JSON配列のみ返してください:
     } finally {
       isTranslating = false;
     }
+  }
+
+  // ============================================================
+  // 吹き出し単体の再翻訳
+  // ============================================================
+
+  // bboxPct(%): { left, top, width, height } 単一吹き出しを crop する
+  // 返値: Promise<{ dataUrl, cropBox:{x1,y1,x2,y2}, W, H } | null>
+  function cropBubbleImage(imageDataUrl, bboxPct, paddingRatio = BUBBLE_CROP_PADDING) {
+    return new Promise((resolve) => {
+      if (!imageDataUrl || !bboxPct) { resolve(null); return; }
+      const img = new Image();
+      img.onload = () => {
+        try {
+          const W = img.naturalWidth, H = img.naturalHeight;
+          const x1px = (bboxPct.left / 100) * W;
+          const y1px = (bboxPct.top  / 100) * H;
+          const wpx  = (bboxPct.width  / 100) * W;
+          const hpx  = (bboxPct.height / 100) * H;
+          const padX = wpx * paddingRatio;
+          const padY = hpx * paddingRatio;
+          const cropX1 = Math.max(0, Math.round(x1px - padX));
+          const cropY1 = Math.max(0, Math.round(y1px - padY));
+          const cropX2 = Math.min(W, Math.round(x1px + wpx + padX));
+          const cropY2 = Math.min(H, Math.round(y1px + hpx + padY));
+          const cropW  = cropX2 - cropX1;
+          const cropH  = cropY2 - cropY1;
+          if (cropW <= 0 || cropH <= 0) { resolve(null); return; }
+          const canvas = document.createElement('canvas');
+          canvas.width  = cropW;
+          canvas.height = cropH;
+          canvas.getContext('2d').drawImage(img, cropX1, cropY1, cropW, cropH, 0, 0, cropW, cropH);
+          resolve({ dataUrl: canvas.toDataURL('image/jpeg', 0.92), cropBox: { x1: cropX1, y1: cropY1, x2: cropX2, y2: cropY2 }, W, H });
+        } catch { resolve(null); }
+      };
+      img.onerror = () => resolve(null);
+      img.src = imageDataUrl;
+    });
+  }
+
+  // 単一の吹き出し（_lastTranslations[origIndex]）を再翻訳して該当オーバーレイを更新する
+  async function retranslateBubble(origIndex) {
+    if (isTranslating) return;
+    if (!_lastImageDataUrl || !_lastTranslations) {
+      showNotification('翻訳データがありません。先にページ全体を翻訳してください。', 'warn');
+      return;
+    }
+    const item = _lastTranslations[origIndex];
+    if (!item || !item.bbox) {
+      showNotification('対象の吹き出しが見つかりません', 'error');
+      return;
+    }
+
+    isTranslating = true;
+    try {
+      const cropResult = await cropBubbleImage(_lastImageDataUrl, item.bbox);
+      if (!cropResult) {
+        showNotification('吹き出しの切り抜きに失敗しました', 'error');
+        return;
+      }
+      const { dataUrl: cropDataUrl, cropBox, W, H } = cropResult;
+
+      const response = await translateImage(cropDataUrl, null, true);
+      if (!response || response.error) {
+        showNotification(response?.error || '翻訳応答がありません', 'error');
+        return;
+      }
+
+      const rawItems = response.translations;
+      if (!rawItems || rawItems.length === 0) {
+        showNotification('テキストが見つかりませんでした', 'info');
+        return;
+      }
+
+      const incoming = rawItems.map(it => ({
+        ...it,
+        bbox: it.bbox ? transformBboxToFullPage(it.bbox, cropBox, W, H) : it.bbox,
+      }));
+
+      // 元 bbox に最も近い結果を1件選び、テキストのみ差し替える
+      // （単体再翻訳は「この吹き出しの訳文だけ更新」が目的。
+      //   AI が返す微妙にズレた bbox を採用すると旧位置の原文が露出するため、
+      //   位置は元のままに固定する）
+      let best = null;
+      let bestIou = -1;
+      for (const it of incoming) {
+        if (!it.bbox) continue;
+        const iou = calcIou(item.bbox, it.bbox);
+        if (iou > bestIou) { bestIou = iou; best = it; }
+      }
+      if (!best) best = incoming[0];
+      // bbox は元の overlay のものを温存
+      best = { ...best, bbox: item.bbox };
+
+      const merged = _lastTranslations.slice();
+      merged[origIndex] = best;
+      const changedIndices = new Set([origIndex]);
+      _lastTranslations = merged;
+
+      if (overlayContainer) {
+        // 既存 DOM を残したまま addRetranslatedOverlays に渡すと、
+        // 既存 overlay のテキスト更新 + ハイライトのパスに乗る（位置は維持される）
+        addRetranslatedOverlays(overlayContainer, merged, changedIndices);
+      }
+
+      showNotification('テキストを更新しました', 'success');
+    } catch (err) {
+      showNotification('翻訳に失敗: ' + err.message, 'error');
+    } finally {
+      isTranslating = false;
+    }
+  }
+
+  // 吹き出し単体再翻訳ボタン要素を生成（オーバーレイの子として追加する）
+  function createBubbleRetranslateButton(origIndex) {
+    const btn = document.createElement('button');
+    btn.className = 'mut-bubble-retranslate-btn';
+    btn.title = 'この吹き出しを再翻訳';
+    btn.insertAdjacentHTML('afterbegin',
+      '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">' +
+      '<path d="M23 4v6h-6"/>' +
+      '<path d="M1 20v-6h6"/>' +
+      '<path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>' +
+      '</svg>');
+    // ドラッグ起動を抑止（overlay の mousedown ハンドラに到達させない）
+    btn.addEventListener('mousedown', (e) => e.stopPropagation());
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      retranslateBubble(origIndex);
+    });
+    return btn;
   }
 
   function renderOverlays(targetEl, translations, adjustments = {}, onAdjusted = null, capturedRect = null) {
@@ -1805,6 +1939,9 @@ JSON配列のみ返してください:
       const resizeHandle = document.createElement('div');
       resizeHandle.className = 'mut-resize-handle';
       overlay.appendChild(resizeHandle);
+
+      // 吹き出し単体再翻訳ボタン（ホバーで右上に表示）
+      overlay.appendChild(createBubbleRetranslateButton(item.origIndex));
 
       makeDraggableResizable(overlay, resizeHandle, index, onAdjusted);
       overlayContainer.appendChild(overlay);
