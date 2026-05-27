@@ -317,6 +317,26 @@
   background: rgba(26, 26, 46, 1);
 }
 
+/* v2 Phase 1: シリーズ検出インジケーター（デバッグ表示） */
+.mut-series-indicator {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 8px;
+  font-size: 12px;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  color: #e0e0e0;
+  white-space: nowrap;
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: default;
+  border-left: 1px solid rgba(255, 255, 255, 0.15);
+  margin-left: 2px;
+}
+.mut-series-indicator--none {
+  color: rgba(255, 255, 255, 0.35);
+}
+
 /* 吹き出し単体の再翻訳ボタン（オーバーレイホバー時のみ右上に表示） */
 .mut-bubble-retranslate-btn {
   position: absolute;
