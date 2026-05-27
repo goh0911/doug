@@ -11,6 +11,7 @@ import {
 } from './whitelist.js';
 import { handleImageTranslation } from './translate.js';
 import { handlePreloadQueue, resumePreloadQueue } from './preload.js';
+import { detectSeries } from './utils/series-detect.js';
 
 // ============================================================
 // マイグレーション: sync → local への移行
@@ -129,6 +130,17 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
     if (message.type === 'KEEP_ALIVE') {
       sendResponse({ ok: true });
+      return;
+    }
+
+    if (message.type === 'DETECT_SERIES') {
+      // whitelist 通過後にのみ実行（isWebContentScript チェック済み）
+      try {
+        const result = await detectSeries(message.payload);
+        sendResponse(result);
+      } catch (err) {
+        sendResponse(null);
+      }
       return;
     }
 
