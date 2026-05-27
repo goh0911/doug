@@ -14,6 +14,9 @@
   let autoTranslate = false;
   let autoTranslateTimer = null;
 
+  // v2 Phase 1: 検出されたシリーズ情報（ローカル保持のみ、ストレージ書き込みなし）
+  let seriesInfo = null;
+
   // ============================================================
   // パネルbbox推定定数（フェーズ1チューニング用 — ファイル先頭集約）
   // ============================================================
@@ -276,7 +279,13 @@ JSON配列のみ返してください:
       '<rect x="2" y="13" width="9" height="9"/><rect x="13" y="13" width="9" height="9"/>' +
       '</svg>');
 
-    toolbar.append(translateBtn, autoBtn, toggleBtn, clearBtn, debugBtn);
+    // v2 Phase 1: シリーズ検出デバッグ表示
+    const seriesIndicator = document.createElement('span');
+    seriesIndicator.id = 'mut-series-indicator';
+    seriesIndicator.className = 'mut-series-indicator mut-series-indicator--none';
+    seriesIndicator.textContent = '📚 検出不可';
+
+    toolbar.append(translateBtn, autoBtn, toggleBtn, clearBtn, debugBtn, seriesIndicator);
     const parent = getUIParent();
     parent.appendChild(toolbar);
 
@@ -332,6 +341,24 @@ JSON配列のみ返してください:
     document.getElementById('mut-btn-toggle').style.display = '';
     document.getElementById('mut-btn-clear').style.display = '';
     document.getElementById('mut-btn-debug').style.display = '';
+  }
+
+  // v2 Phase 1: シリーズインジケーター更新
+  function updateSeriesIndicator(info) {
+    const el = document.getElementById('mut-series-indicator');
+    if (!el) return;
+    if (info && info.series) {
+      el.className = 'mut-series-indicator';
+      const displayName = info.issueNumber != null
+        ? `${info.series} #${info.issueNumber}`
+        : info.series;
+      el.textContent = `📚 ${displayName}`;
+      el.title = `source: ${info.source}, confidence: ${info.confidence}`;
+    } else {
+      el.className = 'mut-series-indicator mut-series-indicator--none';
+      el.textContent = '📚 検出不可';
+      el.title = '';
+    }
   }
 
   // ============================================================
@@ -510,6 +537,25 @@ JSON配列のみ返してください:
       showNotification('コミック画像が見つかりません', 'error');
       return;
     }
+
+    // === v2 Phase 1: シリーズ検出（whitelist 通過後にのみ実行） ===
+    try {
+      seriesInfo = await chrome.runtime.sendMessage({
+        type: 'DETECT_SERIES',
+        payload: {
+          title: document.title,
+          url: location.href,
+          h1: document.querySelector('h1')?.textContent?.trim() || null,
+          ogTitle: document.querySelector('meta[property="og:title"]')?.content || null,
+        },
+      });
+      console.log('[doug] Series detected:', seriesInfo);
+      updateSeriesIndicator(seriesInfo);
+    } catch {
+      seriesInfo = null;
+      updateSeriesIndicator(null);
+    }
+    // === ここまで ===
 
     isTranslating = true;
     const btn = document.getElementById('mut-btn-translate');
