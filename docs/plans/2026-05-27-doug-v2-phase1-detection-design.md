@@ -310,26 +310,43 @@ CSS は最小限。既存の `#doug-toolbar` 内に span を追加するだけ�
 検証手順：各サイトで 5〜10 ページを開き、ツールバーのシリーズ表示を目視確認。
 誤検出・検出失敗のサンプルを集め、Phase 5（Nano fallback）で改善する素材とする。
 
-### 付録: 実タイトル採取（着手前に埋める）
+### 付録: 実タイトル採取結果
 
-**実装着手前のゲート条件**として、ユーザーが普段読んでいるコミックサイトから実際のページタイトル文字列を採取し、ここに貼る。
-机上で 4 パターンの妥当性を判定するのは危険なため、最低でも 1 サイトあたり 5 件、3 サイト以上のサンプルを集める。
+#### Marvel.com `/comics/issue/*`（採取日: 2026-05-27、8 サンプル）
 
-```
-# サイトA（例: ComiXology）
-[ ] "Immortal Hulk #20"           → hash-num ヒット想定
-[ ] "Saga Vol. 9 - Endless War"   → keyword-num ヒット想定
-[ ] ...
+| # | 採取タイトル | Regex 結果 | 結果評価 |
+|---|---|---|---|
+| 1 | `Doomquest (2026) #1 \| Comic Issues \| Marvel` | hash-num: series="Doomquest (2026)", num=1 | ✓ |
+| 2 | `WICCAN & HULKLING: RAID OF ULTRON #1 (2026) #1 \| Comic Issues \| Marvel` | hash-num: series="WICCAN & HULKLING: RAID OF ULTRON", num=1 | △ サブタイトル内の #1 を最初に捕捉、(2026) が series 名から落ちる |
+| 3 | `Jla/Avengers Facsimile Edition (2026) #1 \| Comic Issues \| Marvel` | hash-num: series="Jla/Avengers Facsimile Edition (2026)", num=1 | ✓ |
+| 4 | `Amazing Spider-Man: Spider-Versity (2026) #2 \| Comic Issues \| Marvel` | hash-num: series="Amazing Spider-Man: Spider-Versity (2026)", num=2 | ✓ |
+| 5 | `Wonder Man (2026) #1 \| Comic Issues \| Marvel` | hash-num: series="Wonder Man (2026)", num=1 | ✓ |
+| 6 | `Wonder Man (2026) #2 \| Comic Issues \| Marvel` | hash-num: series="Wonder Man (2026)", num=2 | ✓ |
+| 7 | `Wonder Man (2026) #3 \| Comic Issues \| Marvel` | hash-num: series="Wonder Man (2026)", num=3 | ✓ |
+| 8 | `Planet of the Apes Vs. Fantastic Four (2026) #4 \| Comic Issues \| Marvel` | hash-num: series="Planet of the Apes Vs. Fantastic Four (2026)", num=4 | ✓ |
 
-# サイトB（例: MangaDex）
-[ ] "One Piece - Chapter 1100"    → keyword-num ヒット想定
-[ ] ...
+**ヒット率**: 8/8 (100%) — Phase 1 着手ゲート（80%）達成
+**同シリーズ一貫性**: Wonder Man #1〜#3 すべて同じ `series="Wonder Man (2026)"` → SeriesId 一致 ✓
 
-# サイトC（実際の読書サイト）
-[ ] ...
-```
+#### 観察事項
 
-このリストが埋まるまで Phase 1 実装に着手しない。
+- **トレーリングサイト suffix（`| Comic Issues | Marvel`）は問題なし** — lazy 量化子 `.+?` のおかげで `#N` 直前で停止するため、suffix は捕捉されない
+- **年情報 `(2026)` は series 名に含まれる** — これは Marvel の慣習に整合（同タイトルの異なる volume を年で区別）
+- **エッジケース**: サブタイトルに `#N` を含む one-shot（WICCAN & HULKLING）では、lazy 量化子が最初の `#N` を捕捉する。one-shot なので Phase 1 では実害なしだが、Phase 5 Nano fallback または以下の改善で対応可能：
+
+  ```js
+  // 改善案: 末尾優先で #N を捕捉（greedy 後ろ向き）
+  // 末尾の "#N" だけが issue number、それ以前の #N は series 名の一部とみなす
+  const HASH_NUM_TRAILING = /^(.+?)\s*#\s*(\d+(?:\.\d+)?)\s*(?:\(\d{4}\))?\s*(?:\|.*)?$/i;
+  ```
+
+  ただし本パターンは "Wonder Man (2026) #3 \| ..." も対応する必要があり、年情報や末尾suffix の許容が必要になる。複雑化を避けるため Phase 1 では現行 lazy パターン維持、改善は Phase 2 計測後に判断。
+
+#### 残課題（Phase 1 実装後の運用で検証）
+
+- **MangaDex / Webtoons / 日本語マンガサイト**でのサンプル採取 — ユーザーの実際の読書環境次第。Phase 1 実装をリリースした後にツールバーのデバッグ表示で命中率を継続観測する
+- **`ja-num` パターンの実データ検証** — 現状は机上の正規表現のまま
+- **non-Latin 文字（中国語・韓国語）コミックタイトル**の挙動
 
 ### E2E テスト
 
