@@ -313,6 +313,9 @@ JSON配列のみ返してください:
     });
 
     makeDraggable(toolbar);
+
+    // v2 Phase 1: ツールバー出現直後にシリーズ検出を実行（fire-and-forget）
+    detectAndUpdateSeriesIndicator();
   }
 
   function makeDraggable(el) {
@@ -358,6 +361,26 @@ JSON配列のみ返してください:
       el.className = 'mut-series-indicator mut-series-indicator--none';
       el.textContent = '📚 検出不可';
       el.title = '';
+    }
+  }
+
+  // v2 Phase 1: 現在ページの DETECT_SERIES をリクエストして seriesInfo / インジケーターを更新
+  async function detectAndUpdateSeriesIndicator() {
+    try {
+      seriesInfo = await chrome.runtime.sendMessage({
+        type: 'DETECT_SERIES',
+        payload: {
+          title: document.title,
+          url: location.href,
+          h1: document.querySelector('h1')?.textContent?.trim() || null,
+          ogTitle: document.querySelector('meta[property="og:title"]')?.content || null,
+        },
+      });
+      console.log('[doug] Series detected:', seriesInfo);
+      updateSeriesIndicator(seriesInfo);
+    } catch {
+      seriesInfo = null;
+      updateSeriesIndicator(null);
     }
   }
 
@@ -538,24 +561,8 @@ JSON配列のみ返してください:
       return;
     }
 
-    // === v2 Phase 1: シリーズ検出（whitelist 通過後にのみ実行） ===
-    try {
-      seriesInfo = await chrome.runtime.sendMessage({
-        type: 'DETECT_SERIES',
-        payload: {
-          title: document.title,
-          url: location.href,
-          h1: document.querySelector('h1')?.textContent?.trim() || null,
-          ogTitle: document.querySelector('meta[property="og:title"]')?.content || null,
-        },
-      });
-      console.log('[doug] Series detected:', seriesInfo);
-      updateSeriesIndicator(seriesInfo);
-    } catch {
-      seriesInfo = null;
-      updateSeriesIndicator(null);
-    }
-    // === ここまで ===
+    // v2 Phase 1: 翻訳時にも最新の document.title で再検出（SPA でタイトルが変わる場合に追随）
+    await detectAndUpdateSeriesIndicator();
 
     isTranslating = true;
     const btn = document.getElementById('mut-btn-translate');
