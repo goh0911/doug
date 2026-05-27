@@ -151,7 +151,7 @@ async function processPreloadItem(url, settings) {
     // キャッシュ済みならスキップ（進捗は進める）
     const preloadProvider = settings.apiProvider || 'gemini';
     const preloadModelMap = {
-      gemini: settings.geminiModel || 'gemini-2.5-flash-lite',
+      gemini: settings.geminiModel || 'gemini-3.1-flash-lite',
       claude: settings.claudeModel || 'claude-sonnet-4-6',
       openai: settings.openaiModel || 'gpt-4o-mini',
       ollama: settings.ollamaModel || 'qwen3-vl:8b',

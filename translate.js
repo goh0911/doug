@@ -19,7 +19,7 @@ export async function handleImageTranslation(imageData, imageUrl, imageDims, opt
 
   // キャッシュキー用：現在有効なモデル名を取得
   const MODEL_KEY_MAP = {
-    gemini: settings.geminiModel || 'gemini-2.5-flash-lite',
+    gemini: settings.geminiModel || 'gemini-3.1-flash-lite',
     claude: settings.claudeModel || 'claude-sonnet-4-6',
     openai: settings.openaiModel || 'gpt-5.4-2026-03-05',
     ollama: settings.ollamaModel || 'qwen3-vl:8b',
@@ -179,7 +179,7 @@ function extractSafeErrorMessage(errBody) {
 async function translateImageWithGemini(apiKey, parsed, prompt, imageDims, model) {
   const { mimeType, base64Data } = parsed;
 
-  const modelName = model || 'gemini-2.5-flash-lite';
+  const modelName = model || 'gemini-3.1-flash-lite';
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(modelName)}:generateContent`;
   const body = JSON.stringify({
     contents: [{

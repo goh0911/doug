@@ -42,7 +42,7 @@ AIビジョンAPIを使って英語テキストを検出・翻訳します。ユ
 
 | プロバイダー | 翻訳モデル（選択可） | 解析モデル（自動） |
 |---|---|---|
-| **Gemini** | gemini-2.5-pro / gemini-2.5-flash / gemini-2.5-flash-lite 他 | gemini-2.0-flash-lite |
+| **Gemini** | gemini-3.1-pro-preview / gemini-3.5-flash / gemini-3.1-flash-lite | gemini-2.0-flash-lite |
 | **Claude** | claude-opus-4-6 / claude-sonnet-4-6 / claude-haiku-4-5-20251001 | claude-haiku-4-5-20251001 |
 | **ChatGPT** | gpt-5.4-2026-03-05 / gpt-5.4-pro-2026-03-05 | gpt-4o-mini |
 | **Ollama** | qwen3-vl:8b 他（ローカル実行） | 設定中のモデルをそのまま使用 |
