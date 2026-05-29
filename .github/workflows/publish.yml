@@ -19,7 +19,8 @@ jobs:
             content.css \
             popup.html popup.js popup.css \
             options.html options.js \
-            settings.js image.js stats.js cache.js \
+            series.html series.js series.css \
+            settings.js image.js stats.js cache.js series-store.js \
             whitelist.js translate.js preload.js \
             utils/ \
             icons/ \
