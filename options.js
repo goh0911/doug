@@ -278,6 +278,11 @@ document.addEventListener('DOMContentLoaded', async () => {
     showStatus('API使用回数をリセットしました', 'ok');
   });
 
+  // シリーズ管理を開く
+  document.getElementById('openSeriesManagerBtn')?.addEventListener('click', () => {
+    chrome.tabs.create({ url: chrome.runtime.getURL('series.html') });
+  });
+
   // 保存ボタン
   $('saveBtn').addEventListener('click', async () => {
     const provider = $('apiProvider').value;
