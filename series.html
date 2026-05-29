@@ -11,20 +11,26 @@
   <div class="container">
     <h1>📚 Doug シリーズ管理</h1>
 
-    <div class="section" id="usageSection">
-      <div id="usageText"></div>
-      <div class="usage-bar">
-        <div class="usage-bar-fill" id="usageBarFill"></div>
+    <!-- 一覧ビュー -->
+    <div id="listView">
+      <div class="section" id="usageSection">
+        <div id="usageText"></div>
+        <div class="usage-bar">
+          <div class="usage-bar-fill" id="usageBarFill"></div>
+        </div>
+      </div>
+
+      <div id="warnBanner" class="warn-banner" style="display:none"></div>
+
+      <div class="section">
+        <label>検出済みシリーズ</label>
+        <div id="seriesList"></div>
+        <div id="emptyState" class="empty-state" style="display:none">まだシリーズが記録されていません。対応サイトでコミックを翻訳すると、ここに表示されます。</div>
       </div>
     </div>
 
-    <div id="warnBanner" class="warn-banner" style="display:none"></div>
-
-    <div class="section">
-      <label>検出済みシリーズ</label>
-      <div id="seriesList"></div>
-      <div id="emptyState" class="empty-state" style="display:none">まだシリーズが記録されていません。対応サイトでコミックを翻訳すると、ここに表示されます。</div>
-    </div>
+    <!-- 詳細・編集ビュー -->
+    <div id="detailView" style="display:none"></div>
   </div>
 
   <script src="series.js"></script>

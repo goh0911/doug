@@ -99,3 +99,145 @@ body {
   padding: 24px 0;
   text-align: center;
 }
+
+/* ---- 詳細・編集ビュー ---- */
+
+.back-link {
+  color: #ffd700;
+  cursor: pointer;
+  font-size: 13px;
+  display: inline-block;
+  margin-bottom: 12px;
+  text-decoration: none;
+}
+.back-link:hover {
+  text-decoration: underline;
+}
+
+.detail-title {
+  font-size: 16px;
+  font-weight: 700;
+  color: #e0e0e0;
+  margin-bottom: 4px;
+}
+
+.detail-meta-block {
+  margin-bottom: 16px;
+}
+
+.detail-field {
+  margin-bottom: 16px;
+}
+
+.detail-input-row {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  margin-top: 6px;
+}
+
+.detail-input-row input[type="text"] {
+  flex: 1;
+  padding: 8px 10px;
+  background: #fff;
+  border: 1px solid #ccc;
+  border-radius: 6px;
+  color: #1a1a2e;
+  font-size: 13px;
+  outline: none;
+}
+.detail-input-row input[type="text"]:focus {
+  border-color: #ffd700;
+}
+
+.detail-save-btn {
+  width: auto;
+  padding: 8px 14px;
+  font-size: 13px;
+  flex-shrink: 0;
+}
+
+.detail-tone-custom {
+  display: block;
+  width: 100%;
+  margin-top: 6px;
+  padding: 8px 10px;
+  background: #fff;
+  border: 1px solid #ccc;
+  border-radius: 6px;
+  color: #1a1a2e;
+  font-size: 13px;
+  resize: vertical;
+  outline: none;
+  font-family: inherit;
+}
+.detail-tone-custom:focus {
+  border-color: #ffd700;
+}
+
+.glossary-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 0;
+  border-bottom: 1px solid #222;
+  font-size: 13px;
+  color: #ccc;
+}
+
+.glossary-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.glossary-add-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-top: 10px;
+}
+
+.glossary-add-input {
+  flex: 1;
+  padding: 7px 10px;
+  background: #fff;
+  border: 1px solid #ccc;
+  border-radius: 6px;
+  color: #1a1a2e;
+  font-size: 13px;
+  outline: none;
+  min-width: 0;
+}
+.glossary-add-input:focus {
+  border-color: #ffd700;
+}
+
+.inline-msg {
+  font-size: 12px;
+  margin-top: 4px;
+  min-height: 16px;
+}
+.inline-msg.ok {
+  color: #4caf50;
+}
+.inline-msg.err {
+  color: #f44336;
+}
+
+.btn-danger {
+  padding: 8px 16px;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  background: #3a2a2a;
+  border: 1px solid #f44336;
+  color: #ffb4b4;
+  transition: background 0.15s;
+}
+.btn-danger:hover {
+  background: #4a2a2a;
+}
