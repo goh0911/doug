@@ -118,6 +118,100 @@
     } catch { return []; }
   }
 
+  // ============================================================
+  // utils/prompt-builder.js・utils/glossary-substitute.js のコピー。
+  // 変更時は両方同期すること（content.js は classic script のため import 不可）。
+  // ============================================================
+
+  // プリセット口調 → 指示文（'auto' は指示なし＝''）
+  const TONE_INSTRUCTIONS = {
+    auto: '',
+    '敬体': '全体的に「です・ます」調で翻訳してください。',
+    '常体': '全体的に「だ・である」調で翻訳してください。',
+    '硬め': '硬く落ち着いた文体で翻訳してください。',
+    '柔らかめ': '柔らかく口語的な文体で翻訳してください。',
+  };
+
+  // 用語集をプロンプトに載せる上限
+  const GLOSSARY_CAP = 30;
+
+  function buildSeriesPromptSection({ seriesName, glossaryLangMap, toneStyle } = {}) {
+    const entries =
+      glossaryLangMap && typeof glossaryLangMap === 'object'
+        ? Object.keys(glossaryLangMap)
+            .map((orig) => ({ orig, ...glossaryLangMap[orig] }))
+            .filter((e) => e.approved === true && typeof e.translated === 'string')
+            .sort((a, b) => (b.count ?? 0) - (a.count ?? 0))
+            .slice(0, GLOSSARY_CAP)
+        : [];
+
+    let toneInstruction = '';
+    if (toneStyle && toneStyle !== 'auto') {
+      if (Object.prototype.hasOwnProperty.call(TONE_INSTRUCTIONS, toneStyle)) {
+        toneInstruction = TONE_INSTRUCTIONS[toneStyle];
+      } else {
+        toneInstruction = String(toneStyle);
+      }
+    }
+
+    if (entries.length === 0 && !toneInstruction) return '';
+
+    const lines = [];
+    if (seriesName) lines.push(`このコミックは「${seriesName}」シリーズです。`);
+    if (entries.length > 0) {
+      lines.push('【用語集】以下の固有名詞は必ずこの訳語を使用してください:');
+      entries.forEach((e, i) => lines.push(`${i + 1}. ${e.orig} → ${e.translated}`));
+    }
+    if (toneInstruction) lines.push(`【訳文の口調】${toneInstruction}`);
+    return lines.join('\n');
+  }
+
+  function escapeRegExp(s) {
+    return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  }
+
+  function substituteGlossaryTerms(translatedText, originalText, glossaryLangMap) {
+    if (typeof translatedText !== 'string' || !glossaryLangMap || typeof glossaryLangMap !== 'object') {
+      return { text: translatedText, hits: 0 };
+    }
+    const terms = Object.keys(glossaryLangMap).filter((orig) => {
+      const e = glossaryLangMap[orig];
+      return (
+        e &&
+        e.approved === true &&
+        typeof e.translated === 'string' &&
+        typeof originalText === 'string' &&
+        orig.length > 0 &&
+        originalText.includes(orig)
+      );
+    });
+    if (terms.length === 0) return { text: translatedText, hits: 0 };
+    terms.sort((a, b) => b.length - a.length);
+    const re = new RegExp(terms.map(escapeRegExp).join('|'), 'g');
+    let hits = 0;
+    const text = translatedText.replace(re, (m) => {
+      hits++;
+      return glossaryLangMap[m].translated;
+    });
+    return { text, hits };
+  }
+
+  function applyGlossaryPostProcess(translations, glossaryLangMap) {
+    if (!Array.isArray(translations) || !glossaryLangMap || typeof glossaryLangMap !== 'object') {
+      return { translations, totalHits: 0 };
+    }
+    let totalHits = 0;
+    const out = translations.map((t) => {
+      if (!t || typeof t.translated !== 'string') return t;
+      const { text, hits } = substituteGlossaryTerms(t.translated, t.original ?? '', glossaryLangMap);
+      totalHits += hits;
+      return hits > 0 ? { ...t, translated: text } : t;
+    });
+    return { translations: out, totalHits };
+  }
+
+  // ============================================================
+
   async function translateWithOllamaDirect(imageDataUrl) {
     const settings = await chrome.storage.local.get({
       ollamaModel: 'qwen3-vl:8b',
@@ -131,7 +225,26 @@
     }
     const langName = OLLAMA_LANG_NAMES[targetLang] || targetLang;
     const base64Data = imageDataUrl.replace(/^data:image\/\w+;base64,/, '');
-    const prompt = `あなたはコミック翻訳の専門家です。この画像に含まれるすべてのテキストを検出・翻訳してください。
+
+    // 層A/B: シリーズ文脈ロード
+    let glossaryLangMap = null;
+    let seriesSection = '';
+    if (seriesInfo && seriesInfo.seriesId) {
+      try {
+        const series = await chrome.runtime.sendMessage({ type: 'GET_SERIES', payload: { seriesId: seriesInfo.seriesId } });
+        if (series) {
+          glossaryLangMap = (series.glossary && series.glossary[targetLang]) || null;
+          seriesSection = buildSeriesPromptSection({
+            seriesName: series.meta && series.meta.name,
+            glossaryLangMap,
+            toneStyle: series.tone && series.tone.style,
+          });
+        }
+      } catch { /* フォールバック */ }
+    }
+
+    const sectionBlock = seriesSection ? `\n\n${seriesSection}` : '';
+    const prompt = `あなたはコミック翻訳の専門家です。この画像に含まれるすべてのテキストを検出・翻訳してください。${sectionBlock}
 
 【検出ルール】
 - 各パネルを上から下、左から右の順にスキャンする
@@ -178,7 +291,12 @@ JSON配列のみ返してください:
     const data = await res.json();
     const text = data.message?.content;
     if (!text) throw new Error('Ollama から応答がありません');
-    return { translations: ollamaParseResponse(text) };
+    const parsed = ollamaParseResponse(text);
+    if (glossaryLangMap) {
+      const r = applyGlossaryPostProcess(parsed, glossaryLangMap);
+      return { translations: r.translations, glossaryHits: r.totalHits };
+    }
+    return { translations: parsed, glossaryHits: 0 };
   }
 
   // ============================================================
@@ -199,7 +317,7 @@ JSON配列のみ返してください:
         try { chrome.runtime.sendMessage({ type: 'KEEP_ALIVE' }).catch(() => {}); }
         catch { clearInterval(keepAliveId); handleContextInvalidated(); }
       }, 10000);
-      port.postMessage({ type: 'TRANSLATE_IMAGE', imageData: imageDataUrl, imageUrl: imageUrl, forceRefresh });
+      port.postMessage({ type: 'TRANSLATE_IMAGE', imageData: imageDataUrl, imageUrl: imageUrl, forceRefresh, seriesId: seriesInfo && seriesInfo.seriesId ? seriesInfo.seriesId : null });
       port.onMessage.addListener((response) => {
         clearInterval(keepAliveId);
         settled = true;
@@ -635,6 +753,7 @@ JSON配列のみ返してください:
             name: seriesInfo.series,
             detectionSource: seriesInfo.source,
             url: location.href,
+            glossaryHits: (response && response.glossaryHits) ? response.glossaryHits : 0,
           },
         }).catch(() => { /* 記録失敗は翻訳結果に影響させない */ });
       }
@@ -725,7 +844,7 @@ JSON配列のみ返してください:
           const imageData = captureRasterElement(img);
           // background.jsに送信（内部でキャッシュチェック・session保存）
           const port = chrome.runtime.connect({ name: 'translate' });
-          port.postMessage({ type: 'TRANSLATE_IMAGE', imageData, imageUrl: img.src });
+          port.postMessage({ type: 'TRANSLATE_IMAGE', imageData, imageUrl: img.src, seriesId: seriesInfo && seriesInfo.seriesId ? seriesInfo.seriesId : null });
           port.onMessage.addListener(() => { port.disconnect(); });
           port.onDisconnect.addListener(() => { void chrome.runtime.lastError; });
         }

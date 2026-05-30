@@ -4,6 +4,9 @@ import { parseVisionResponse } from './utils/parse-utils.js';
 import { getSettings } from './settings.js';
 import { computeImageDataHash, getCachedTranslation, saveCachedTranslation } from './cache.js';
 import { incrementApiStats } from './stats.js';
+import { getSeries } from './series-store.js';
+import { buildSeriesPromptSection } from './utils/prompt-builder.js';
+import { applyGlossaryPostProcess } from './utils/glossary-substitute.js';
 
 const LANG_NAMES = {
   ja: '日本語', ko: '韓国語', 'zh-CN': '簡体字中国語', 'zh-TW': '繁体字中国語',
@@ -31,11 +34,36 @@ export async function handleImageTranslation(imageData, imageUrl, imageDims, opt
     ? await computeImageDataHash(imageData)
     : imageUrl;
 
+  // シリーズ文脈ロード（層A/B 共通）
+  let glossaryLangMap = null;
+  let seriesSection = '';
+  if (options?.seriesId) {
+    try {
+      const series = await getSeries(options.seriesId);
+      if (series) {
+        glossaryLangMap = (series.glossary && series.glossary[settings.targetLang]) || null;
+        seriesSection = buildSeriesPromptSection({
+          seriesName: series.meta && series.meta.name,
+          glossaryLangMap,
+          toneStyle: series.tone && series.tone.style,
+        });
+      }
+    } catch { /* フォールバック: 層A/Bなし */ }
+  }
+
+  // 層B適用ヘルパ
+  const applyLayerB = (translations) => {
+    if (!glossaryLangMap) return { translations, glossaryHits: 0 };
+    const r = applyGlossaryPostProcess(translations, glossaryLangMap);
+    return { translations: r.translations, glossaryHits: r.totalHits };
+  };
+
   // キャッシュ確認（forceRefresh 時はスキップ）
   if (cacheKey && !options?.forceRefresh) {
     const cached = await getCachedTranslation(cacheKey, settings.targetLang, provider, activeModel);
     if (cached) {
-      return { translations: cached, fromCache: true };
+      const r = applyLayerB(cached);
+      return { translations: r.translations, fromCache: true, glossaryHits: r.glossaryHits };
     }
   }
 
@@ -54,7 +82,7 @@ export async function handleImageTranslation(imageData, imageUrl, imageDims, opt
     // parseは1回だけ実行して各API関数に渡す
     const parsed = parseImageDataUrl(imageData);
     // OpenAI は data URL をそのまま受け取るため parsed は Gemini/Claude のみ使用
-    const prompt = buildTranslationPrompt(settings.targetLang);
+    const prompt = buildTranslationPrompt(settings.targetLang, seriesSection);
 
     if (provider === 'ollama') {
       translations = await translateImageWithOllama(
@@ -78,7 +106,8 @@ export async function handleImageTranslation(imageData, imageUrl, imageDims, opt
 
     // 翻訳成功時のみカウント（キャッシュヒット・エラー時はカウントしない）
     await incrementApiStats(provider);
-    return { translations };
+    const r = applyLayerB(translations);
+    return { translations: r.translations, glossaryHits: r.glossaryHits };
   } catch (err) {
     // APIキー等の機密情報が含まれないようサニタイズしてから返す
     const safeMsg = err.message
@@ -98,9 +127,10 @@ function parseImageDataUrl(imageDataUrl) {
 }
 
 // 全プロバイダー共通の翻訳プロンプト
-function buildTranslationPrompt(targetLang) {
+function buildTranslationPrompt(targetLang, seriesSection = '') {
   const langName = LANG_NAMES[targetLang] || targetLang;
-  return `あなたはコミック翻訳の専門家です。この画像に含まれるすべてのテキストを検出・翻訳してください。
+  const sectionBlock = seriesSection ? `\n\n${seriesSection}` : '';
+  return `あなたはコミック翻訳の専門家です。この画像に含まれるすべてのテキストを検出・翻訳してください。${sectionBlock}
 
 【検出ルール】
 - 各パネルを上から下、左から右の順にスキャンする

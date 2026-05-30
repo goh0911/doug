@@ -102,7 +102,7 @@ chrome.runtime.onConnect.addListener((port) => {
         message.imageData,
         message.imageUrl,
         message.imageDims,
-        { forceRefresh: !!message.forceRefresh }
+        { forceRefresh: !!message.forceRefresh, seriesId: message.seriesId ?? null }
       );
       if (!portDisconnected) port.postMessage(result);
     } catch (err) {

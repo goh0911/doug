@@ -103,7 +103,7 @@ export async function listSeries() {
  * @param {{ seriesId: string, name: string, detectionSource: string, url: string }} payload
  * @returns {Promise<object|null>} 保存した series オブジェクト or null（容量超過時）
  */
-export async function recordSeriesTranslation({ seriesId, name, detectionSource, url }) {
+export async function recordSeriesTranslation({ seriesId, name, detectionSource, url, glossaryHits }) {
   return withSeriesLock(seriesId, async () => {
     // 容量チェック
     const usage = await computeUsageInfo();
@@ -152,6 +152,7 @@ export async function recordSeriesTranslation({ seriesId, name, detectionSource,
           ...current.stats,
           translationCount: (current.stats?.translationCount ?? 0) + 1,
           lastTranslatedAt: now,
+          glossaryHits: (current.stats?.glossaryHits ?? 0) + (glossaryHits ?? 0),
         },
       };
       await chrome.storage.local.set({ [key]: updated });
@@ -172,7 +173,7 @@ export async function recordSeriesTranslation({ seriesId, name, detectionSource,
         overrides: { provider: null, model: null, targetLang: null },
         glossary: {},
         tone: { style: 'auto' },
-        stats: { translationCount: 1, lastTranslatedAt: now },
+        stats: { translationCount: 1, lastTranslatedAt: now, glossaryHits: glossaryHits ?? 0 },
       };
       await chrome.storage.local.set({ [key]: series });
       return series;

@@ -567,6 +567,46 @@ describe('並行書込の直列化', () => {
 });
 
 // ============================================================
+// recordSeriesTranslation glossaryHits 加算
+// ============================================================
+describe('recordSeriesTranslation - glossaryHits', () => {
+  it('新規作成時に glossaryHits が stats に初期値として記録される', async () => {
+    const { recordSeriesTranslation, getSeries } = await loadStore();
+    await recordSeriesTranslation({
+      seriesId: 'g001',
+      name: 'Glossary Test',
+      detectionSource: 'regex',
+      url: 'https://example.com/comic/1',
+      glossaryHits: 5,
+    });
+    const series = await getSeries('g001');
+    expect(series.stats.glossaryHits).toBe(5);
+  });
+
+  it('既存更新時に glossaryHits が累積加算される', async () => {
+    const { recordSeriesTranslation, getSeries } = await loadStore();
+    const old = Date.now() - 61 * 1000;
+    _store['series:g002'] = {
+      meta: { name: 'Glossary Test', issueCount: 2, lastVisitedAt: old },
+      urlPatterns: [],
+      overrides: {},
+      glossary: {},
+      tone: { style: 'auto' },
+      stats: { translationCount: 2, lastTranslatedAt: old, glossaryHits: 3 },
+    };
+    await recordSeriesTranslation({
+      seriesId: 'g002',
+      name: 'Glossary Test',
+      detectionSource: 'regex',
+      url: 'https://example.com/comic/2',
+      glossaryHits: 7,
+    });
+    const series = await getSeries('g002');
+    expect(series.stats.glossaryHits).toBe(10); // 3 + 7
+  });
+});
+
+// ============================================================
 // LRU 容量管理
 // ============================================================
 describe('LRU 容量管理', () => {
