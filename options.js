@@ -228,7 +228,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     geminiApiKey: '',
     claudeApiKey: '',
     openaiApiKey: '',
-    geminiModel: 'gemini-3.1-flash-lite',
+    geminiModel: 'gemini-3.5-flash-lite',
     claudeModel: 'claude-sonnet-4-6',
     openaiModel: 'gpt-4o-mini',
     ollamaModel: 'qwen3-vl:8b',
