@@ -107,7 +107,9 @@ export async function handleImageTranslation(imageData, imageUrl, imageDims, opt
     // 翻訳成功時のみカウント（キャッシュヒット・エラー時はカウントしない）
     await incrementApiStats(provider);
     const r = applyLayerB(translations);
-    return { translations: r.translations, glossaryHits: r.glossaryHits };
+    // Phase 4: 翻訳ペアを返す（original/translated の組、layer B 適用前の raw）
+    const pairs = translations.map(t => ({ original: t.original, translated: t.translated })).filter(p => p.original && p.translated);
+    return { translations: r.translations, glossaryHits: r.glossaryHits, pairs };
   } catch (err) {
     // APIキー等の機密情報が含まれないようサニタイズしてから返す
     const safeMsg = err.message

@@ -1,7 +1,7 @@
 // tests/unit/series-store.test.js
 // chrome.storage.local のメモリモックを使用（globalThis.chrome を describe スコープで beforeEach リセット）
 
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
 
 // ============================================================
 // chrome.storage.local のメモリモック
@@ -651,5 +651,377 @@ describe('LRU 容量管理', () => {
     expect(result).toBeNull();
 
     chromeMock.storage.local.QUOTA_BYTES = originalQuota;
+  });
+});
+
+// ============================================================
+// Phase 4: recordSeriesTranslation pairs 対応
+// ============================================================
+describe('recordSeriesTranslation - pairs 追加', () => {
+  it('pairs を渡すと recentPairs に追加される', async () => {
+    const { recordSeriesTranslation, getSeries } = await loadStore();
+    await recordSeriesTranslation({
+      seriesId: 'p4001',
+      name: 'Phase4 Test',
+      detectionSource: 'regex',
+      url: 'https://example.com/comic/1',
+      pairs: [{ original: 'Hulk', translated: 'ハルク' }],
+    });
+    const series = await getSeries('p4001');
+    expect(series.recentPairs).toHaveLength(1);
+    expect(series.recentPairs[0].original).toBe('Hulk');
+  });
+
+  it('pairs を渡さなくても動作する（後方互換）', async () => {
+    const { recordSeriesTranslation, getSeries } = await loadStore();
+    await recordSeriesTranslation({
+      seriesId: 'p4002',
+      name: 'Phase4 Test',
+      detectionSource: 'regex',
+      url: 'https://example.com/comic/1',
+    });
+    const series = await getSeries('p4002');
+    expect(Array.isArray(series.recentPairs)).toBe(true);
+    expect(series.recentPairs).toHaveLength(0);
+  });
+
+  it('1 ページ 10 ペアでも 5 件にサンプリングされる', async () => {
+    const { recordSeriesTranslation, getSeries } = await loadStore();
+    const pairs = Array.from({ length: 10 }, (_, i) => ({
+      original: 'x'.repeat(i + 1),
+      translated: 'y',
+    }));
+    await recordSeriesTranslation({
+      seriesId: 'p4003',
+      name: 'Test',
+      detectionSource: 'regex',
+      url: 'https://example.com/comic/1',
+      pairs,
+    });
+    const series = await getSeries('p4003');
+    expect(series.recentPairs.length).toBeLessThanOrEqual(5);
+  });
+
+  it('50 件超で古い順に消える', async () => {
+    const { recordSeriesTranslation, getSeries } = await loadStore();
+    const old = Date.now() - 61 * 1000;
+
+    // 既存 50 件のシリーズを作る
+    const existing50 = Array.from({ length: 50 }, (_, i) => ({
+      original: `term${i}`,
+      translated: `訳${i}`,
+      at: old + i,
+    }));
+    _store['series:p4004'] = {
+      meta: { name: 'Test', issueCount: 50, lastVisitedAt: old },
+      urlPatterns: [],
+      overrides: {},
+      glossary: {},
+      tone: { style: 'auto' },
+      stats: { translationCount: 50, lastTranslatedAt: old },
+      recentPairs: [...existing50],
+      extractionDue: false,
+      extractionRunning: null,
+      extractionFailures: 0,
+      rejectedOriginals: [],
+    };
+
+    await recordSeriesTranslation({
+      seriesId: 'p4004',
+      name: 'Test',
+      detectionSource: 'regex',
+      url: 'https://example.com/comic/51',
+      pairs: [{ original: 'NewTerm', translated: '新語' }],
+    });
+
+    const series = await getSeries('p4004');
+    expect(series.recentPairs.length).toBeLessThanOrEqual(50);
+  });
+
+  it('20 件以上で extractionDue が立つ', async () => {
+    const { recordSeriesTranslation, getSeries } = await loadStore();
+    const old = Date.now() - 61 * 1000;
+
+    // 既存 19 件のシリーズ
+    const existing19 = Array.from({ length: 19 }, (_, i) => ({
+      original: `term${i}`,
+      translated: `訳${i}`,
+      at: old,
+    }));
+    _store['series:p4005'] = {
+      meta: { name: 'Test', issueCount: 1, lastVisitedAt: old },
+      urlPatterns: [],
+      overrides: {},
+      glossary: {},
+      tone: { style: 'auto' },
+      stats: { translationCount: 1, lastTranslatedAt: old },
+      recentPairs: [...existing19],
+      extractionDue: false,
+      extractionRunning: null,
+      extractionFailures: 0,
+      rejectedOriginals: [],
+    };
+
+    await recordSeriesTranslation({
+      seriesId: 'p4005',
+      name: 'Test',
+      detectionSource: 'regex',
+      url: 'https://example.com/comic/2',
+      pairs: [{ original: 'NewTerm that pushes to 20', translated: '新語' }],
+    });
+
+    const series = await getSeries('p4005');
+    expect(series.recentPairs.length).toBeGreaterThanOrEqual(20);
+    expect(series.extractionDue).toBe(true);
+  });
+});
+
+// ============================================================
+// Phase 4: acquireExtractionLock
+// ============================================================
+describe('acquireExtractionLock', () => {
+  it('ロック取得成功時に extractionRunning がセットされる', async () => {
+    const { acquireExtractionLock, getSeries } = await loadStore();
+    _store['series:lock001'] = {
+      meta: { name: 'Test' },
+      glossary: {},
+      stats: {},
+      recentPairs: [],
+      extractionDue: true,
+      extractionRunning: null,
+      extractionFailures: 0,
+      rejectedOriginals: [],
+    };
+
+    const result = await acquireExtractionLock('lock001');
+    expect(result.status).toBe('ok');
+    const series = await getSeries('lock001');
+    expect(series.extractionRunning).not.toBeNull();
+    expect(typeof series.extractionRunning.startedAt).toBe('number');
+  });
+
+  it('ロック中に再取得すると "locked" を返す', async () => {
+    const { acquireExtractionLock } = await loadStore();
+    const now = Date.now();
+    _store['series:lock002'] = {
+      meta: { name: 'Test' },
+      glossary: {},
+      stats: {},
+      recentPairs: [],
+      extractionDue: true,
+      extractionRunning: { startedAt: now - 5000 }, // 5 秒前（30 秒以内）
+      extractionFailures: 0,
+      rejectedOriginals: [],
+    };
+
+    const result = await acquireExtractionLock('lock002');
+    expect(result.status).toBe('locked');
+  });
+
+  it('30 秒経過したロックは上書き取得できる', async () => {
+    const { acquireExtractionLock } = await loadStore();
+    const now = Date.now();
+    _store['series:lock003'] = {
+      meta: { name: 'Test' },
+      glossary: {},
+      stats: {},
+      recentPairs: [],
+      extractionDue: true,
+      extractionRunning: { startedAt: now - 31_000 }, // 31 秒前（タイムアウト）
+      extractionFailures: 0,
+      rejectedOriginals: [],
+    };
+
+    const result = await acquireExtractionLock('lock003');
+    expect(result.status).toBe('ok');
+  });
+
+  it('存在しないシリーズは "not-found" を返す', async () => {
+    const { acquireExtractionLock } = await loadStore();
+    const result = await acquireExtractionLock('nonexistent999');
+    expect(result.status).toBe('not-found');
+  });
+});
+
+// ============================================================
+// Phase 4: applyExtractionResult
+// ============================================================
+describe('applyExtractionResult - success', () => {
+  it('成功時に候補がマージされる', async () => {
+    const { applyExtractionResult, getSeries } = await loadStore();
+    _store['series:ex001'] = {
+      meta: { name: 'Test' },
+      glossary: { ja: {} },
+      stats: { extractionRuns: 0, candidatesAdded: 0, candidatesRejected: 0 },
+      recentPairs: [{ original: 'a', translated: 'b', at: Date.now() }],
+      extractionDue: true,
+      extractionRunning: { startedAt: Date.now() - 1000 },
+      extractionFailures: 0,
+      rejectedOriginals: [],
+    };
+
+    const result = await applyExtractionResult({
+      seriesId: 'ex001',
+      candidates: [{ original: 'Hulk', translated: 'ハルク' }],
+      success: true,
+    });
+
+    expect(result.status).toBe('ok');
+    expect(result.added).toBe(1);
+    const series = await getSeries('ex001');
+    expect(series.glossary.ja['Hulk']).toBeDefined();
+    expect(series.glossary.ja['Hulk'].approved).toBe(false);
+  });
+
+  it('成功時に recentPairs がクリアされる', async () => {
+    const { applyExtractionResult, getSeries } = await loadStore();
+    _store['series:ex002'] = {
+      meta: { name: 'Test' },
+      glossary: {},
+      stats: {},
+      recentPairs: [{ original: 'a', translated: 'b', at: Date.now() }],
+      extractionDue: true,
+      extractionRunning: { startedAt: Date.now() },
+      extractionFailures: 0,
+      rejectedOriginals: [],
+    };
+
+    await applyExtractionResult({ seriesId: 'ex002', candidates: [], success: true });
+    const series = await getSeries('ex002');
+    expect(series.recentPairs).toHaveLength(0);
+    expect(series.extractionDue).toBe(false);
+  });
+
+  it('成功時に stats が更新される', async () => {
+    const { applyExtractionResult, getSeries } = await loadStore();
+    _store['series:ex003'] = {
+      meta: { name: 'Test' },
+      glossary: { ja: {} },
+      stats: { extractionRuns: 2, candidatesAdded: 3 },
+      recentPairs: [],
+      extractionDue: true,
+      extractionRunning: { startedAt: Date.now() },
+      extractionFailures: 0,
+      rejectedOriginals: [],
+    };
+
+    await applyExtractionResult({
+      seriesId: 'ex003',
+      candidates: [{ original: 'Thor', translated: 'ソー' }],
+      success: true,
+    });
+    const series = await getSeries('ex003');
+    expect(series.stats.extractionRuns).toBe(3);
+    expect(series.stats.candidatesAdded).toBe(4);
+    expect(series.stats.lastExtractionAt).not.toBeNull();
+  });
+});
+
+describe('applyExtractionResult - failure', () => {
+  it('失敗時に extractionFailures が増える', async () => {
+    const { applyExtractionResult, getSeries } = await loadStore();
+    _store['series:ex004'] = {
+      meta: { name: 'Test' },
+      glossary: {},
+      stats: {},
+      recentPairs: [],
+      extractionDue: true,
+      extractionRunning: { startedAt: Date.now() },
+      extractionFailures: 0,
+      rejectedOriginals: [],
+    };
+
+    await applyExtractionResult({ seriesId: 'ex004', candidates: [], success: false });
+    const series = await getSeries('ex004');
+    expect(series.extractionFailures).toBe(1);
+    expect(series.extractionDue).toBe(true); // まだ降りない
+  });
+
+  it('3 回連続失敗で extractionDue が false に降りる', async () => {
+    const { applyExtractionResult, getSeries } = await loadStore();
+    _store['series:ex005'] = {
+      meta: { name: 'Test' },
+      glossary: {},
+      stats: {},
+      recentPairs: [],
+      extractionDue: true,
+      extractionRunning: { startedAt: Date.now() },
+      extractionFailures: 2, // すでに 2 回失敗
+      rejectedOriginals: [],
+    };
+
+    await applyExtractionResult({ seriesId: 'ex005', candidates: [], success: false });
+    const series = await getSeries('ex005');
+    expect(series.extractionFailures).toBe(3);
+    expect(series.extractionDue).toBe(false);
+  });
+});
+
+// ============================================================
+// Phase 4: rejectGlossaryCandidate
+// ============================================================
+describe('rejectGlossaryCandidate', () => {
+  it('rejectedOriginals に追加される', async () => {
+    const { rejectGlossaryCandidate, getSeries } = await loadStore();
+    _store['series:rej001'] = {
+      meta: { name: 'Test' },
+      glossary: { ja: { 'Hulk': { translated: 'ハルク', approved: false, source: 'nano-extract' } } },
+      stats: { candidatesRejected: 0 },
+      recentPairs: [],
+      extractionDue: false,
+      extractionRunning: null,
+      extractionFailures: 0,
+      rejectedOriginals: [],
+    };
+
+    const result = await rejectGlossaryCandidate({ seriesId: 'rej001', original: 'Hulk' });
+    expect(result.status).toBe('ok');
+    const series = await getSeries('rej001');
+    expect(series.rejectedOriginals).toContain('Hulk');
+    expect(series.glossary.ja['Hulk']).toBeUndefined();
+  });
+
+  it('glossaryLangMap から削除される', async () => {
+    const { rejectGlossaryCandidate, getSeries } = await loadStore();
+    _store['series:rej002'] = {
+      meta: { name: 'Test' },
+      glossary: { ja: { 'Banner': { translated: 'バナー', approved: false } } },
+      stats: { candidatesRejected: 0 },
+      recentPairs: [],
+      extractionDue: false,
+      extractionRunning: null,
+      extractionFailures: 0,
+      rejectedOriginals: [],
+    };
+
+    await rejectGlossaryCandidate({ seriesId: 'rej002', original: 'Banner' });
+    const series = await getSeries('rej002');
+    expect(series.glossary.ja['Banner']).toBeUndefined();
+    expect(series.stats.candidatesRejected).toBe(1);
+  });
+
+  it('同じ original を重複追加しない', async () => {
+    const { rejectGlossaryCandidate, getSeries } = await loadStore();
+    _store['series:rej003'] = {
+      meta: { name: 'Test' },
+      glossary: { ja: {} },
+      stats: { candidatesRejected: 1 },
+      recentPairs: [],
+      extractionDue: false,
+      extractionRunning: null,
+      extractionFailures: 0,
+      rejectedOriginals: ['Hulk'], // 既に存在
+    };
+
+    await rejectGlossaryCandidate({ seriesId: 'rej003', original: 'Hulk' });
+    const series = await getSeries('rej003');
+    const count = series.rejectedOriginals.filter(x => x === 'Hulk').length;
+    expect(count).toBe(1);
+  });
+
+  it('存在しないシリーズは "not-found" を返す', async () => {
+    const { rejectGlossaryCandidate } = await loadStore();
+    const result = await rejectGlossaryCandidate({ seriesId: 'nonexistent', original: 'Hulk' });
+    expect(result.status).toBe('not-found');
   });
 });
