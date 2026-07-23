@@ -241,3 +241,75 @@ body {
 .btn-danger:hover {
   background: #4a2a2a;
 }
+
+/* ---- Phase 4: Nano 候補セクション ---- */
+
+.nano-unavail-msg {
+  color: #888;
+  font-size: 12px;
+  margin-top: 6px;
+}
+
+.nano-failure-msg {
+  background: #3a2a2a;
+  border: 1px solid #ff9800;
+  color: #ffcc80;
+  border-radius: 6px;
+  padding: 8px 10px;
+  font-size: 12px;
+  margin-bottom: 10px;
+}
+
+.nano-due-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: #1a2a1a;
+  border: 1px solid #4caf50;
+  border-radius: 6px;
+  padding: 8px 10px;
+  font-size: 12px;
+  color: #a5d6a7;
+  margin-bottom: 10px;
+}
+
+.nano-ctrl-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 8px;
+  margin-bottom: 8px;
+}
+
+.nano-last-at {
+  font-size: 12px;
+  color: #888;
+}
+
+.nano-candidate-list {
+  margin-top: 8px;
+}
+
+.nano-candidate-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 0;
+  border-bottom: 1px solid #222;
+  font-size: 13px;
+  color: #ccc;
+}
+
+.nano-candidate-icon {
+  font-size: 14px;
+  flex-shrink: 0;
+}
+
+.nano-candidate-label {
+  font-size: 10px;
+  background: #2a3a4a;
+  color: #90caf9;
+  border-radius: 4px;
+  padding: 1px 5px;
+  flex-shrink: 0;
+}

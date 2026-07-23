@@ -15,6 +15,7 @@ import { detectSeries } from './utils/series-detect.js';
 import {
   getSeries, listSeries, recordSeriesTranslation, deleteSeries,
   updateSeriesField, addGlossaryEntry, removeGlossaryEntry, getStorageUsageInfo,
+  applyExtractionResult, acquireExtractionLock, rejectGlossaryCandidate,
 } from './series-store.js';
 import { derivePathPrefix } from './utils/url-pattern.js';
 
@@ -154,7 +155,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         const payload = message.payload;
         // background.js 側で derivePathPrefix(url) を処理する
         const pathPrefix = derivePathPrefix(payload.url);
-        const result = await recordSeriesTranslation({ ...payload, pathPrefix });
+        // pairs（Phase 4）が含まれる場合はそのまま転送（pairs が無ければ [] として渡す）
+        const result = await recordSeriesTranslation({ ...payload, pathPrefix, pairs: payload.pairs ?? [] });
         sendResponse(result);
       } catch (err) {
         sendResponse(null);
@@ -221,6 +223,39 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         sendResponse({ ok: true });
       } catch (err) {
         sendResponse({ error: err.message });
+      }
+      return;
+    }
+
+    if (message.type === 'ACQUIRE_EXTRACTION_LOCK') {
+      try {
+        const { seriesId } = message.payload;
+        const result = await acquireExtractionLock(seriesId);
+        sendResponse(result);
+      } catch (err) {
+        sendResponse({ status: 'error', error: err.message });
+      }
+      return;
+    }
+
+    if (message.type === 'EXTRACT_GLOSSARY_CANDIDATES') {
+      try {
+        const { seriesId, candidates, success } = message.payload;
+        const result = await applyExtractionResult({ seriesId, candidates, success });
+        sendResponse(result);
+      } catch (err) {
+        sendResponse({ status: 'error', error: err.message });
+      }
+      return;
+    }
+
+    if (message.type === 'REJECT_GLOSSARY_CANDIDATE') {
+      try {
+        const { seriesId, original } = message.payload;
+        const result = await rejectGlossaryCandidate({ seriesId, original });
+        sendResponse(result);
+      } catch (err) {
+        sendResponse({ status: 'error', error: err.message });
       }
       return;
     }

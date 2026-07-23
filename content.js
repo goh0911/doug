@@ -292,11 +292,13 @@ JSON配列のみ返してください:
     const text = data.message?.content;
     if (!text) throw new Error('Ollama から応答がありません');
     const parsed = ollamaParseResponse(text);
+    // Phase 4: 翻訳ペア（生データ）を付与
+    const pairs = parsed.map(t => ({ original: t.original, translated: t.translated })).filter(p => p.original && p.translated);
     if (glossaryLangMap) {
       const r = applyGlossaryPostProcess(parsed, glossaryLangMap);
-      return { translations: r.translations, glossaryHits: r.totalHits };
+      return { translations: r.translations, glossaryHits: r.totalHits, pairs };
     }
-    return { translations: parsed, glossaryHits: 0 };
+    return { translations: parsed, glossaryHits: 0, pairs };
   }
 
   // ============================================================
@@ -754,6 +756,8 @@ JSON配列のみ返してください:
             detectionSource: seriesInfo.source,
             url: location.href,
             glossaryHits: (response && response.glossaryHits) ? response.glossaryHits : 0,
+            // Phase 4: 翻訳ペア（生データ）を付与してペアバッファリングに使用
+            pairs: (response && Array.isArray(response.pairs)) ? response.pairs : [],
           },
         }).catch(() => { /* 記録失敗は翻訳結果に影響させない */ });
       }
