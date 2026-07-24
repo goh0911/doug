@@ -4,6 +4,7 @@
 
 import { sanitizeGlossaryText, sanitizeToneStyle } from './utils/sanitize.js';
 import { derivePathPrefix } from './utils/url-pattern.js';
+import { sanitizeExample } from './utils/example-utils.js';
 import { sampleRecentPairs, mergeCandidates } from './utils/nano-extract.js';
 
 // ============================================================
@@ -21,6 +22,7 @@ const NO_OP_INTERVAL_MS = 60 * 1000;
 // Phase 4: Nano 用語集自動抽出 定数
 const EXTRACTION_THRESHOLD = 20;          // recentPairs がこの件数に達したら抽出予約
 const RECENT_PAIRS_MAX = 50;              // recentPairs バッファ上限
+const EXAMPLES_MAX = 10;                   // few-shot 例文の保持上限（Phase 6）
 const EXTRACTION_LOCK_TIMEOUT_MS = 30_000; // 抽出ロックタイムアウト（30 秒）
 const EXTRACTION_FAILURE_THRESHOLD = 3;   // 連続失敗でキャンセル
 
@@ -104,6 +106,7 @@ async function getSeriesWithDefaults(seriesId) {
   const series = await getSeries(seriesId);
   if (!series) return null;
   if (!Array.isArray(series.recentPairs)) series.recentPairs = [];
+  if (!Array.isArray(series.examples)) series.examples = [];
   if (series.extractionDue === undefined) series.extractionDue = false;
   if (series.extractionRunning === undefined) series.extractionRunning = null;
   if (series.extractionFailures === undefined) series.extractionFailures = 0;
@@ -487,6 +490,55 @@ export async function removeGlossaryEntry(seriesId, targetLang, original) {
     glossary[targetLang] = langGlossary;
 
     await chrome.storage.local.set({ [key]: { ...series, glossary } });
+  });
+}
+
+/**
+ * few-shot 例文を追加する（Phase 6）
+ * @param {string} seriesId
+ * @param {{ original: string, translated: string }} pair
+ * @returns {Promise<{ status: 'ok'|'full'|'duplicate'|'invalid', examples: Array }>}
+ */
+export async function addExample(seriesId, { original, translated } = {}) {
+  const sanitized = sanitizeExample({ original, translated });
+  if (!sanitized) return { status: 'invalid', examples: [] };
+
+  return withSeriesLock(seriesId, async () => {
+    const key = `series:${seriesId}`;
+    const result = await chrome.storage.local.get(key);
+    const series = result[key];
+    if (!series) return { status: 'invalid', examples: [] };
+
+    const examples = Array.isArray(series.examples) ? series.examples : [];
+    if (examples.some((e) => e.original === sanitized.original && e.translated === sanitized.translated)) {
+      return { status: 'duplicate', examples };
+    }
+    if (examples.length >= EXAMPLES_MAX) {
+      return { status: 'full', examples };
+    }
+    const nextExamples = [...examples, { ...sanitized, addedAt: Date.now() }];
+    await chrome.storage.local.set({ [key]: { ...series, examples: nextExamples } });
+    return { status: 'ok', examples: nextExamples };
+  });
+}
+
+/**
+ * few-shot 例文を index 指定で削除する（Phase 6）
+ * @param {string} seriesId
+ * @param {number} index
+ * @returns {Promise<{ examples: Array }>}
+ */
+export async function removeExample(seriesId, index) {
+  return withSeriesLock(seriesId, async () => {
+    const key = `series:${seriesId}`;
+    const result = await chrome.storage.local.get(key);
+    const series = result[key];
+    if (!series) return { examples: [] };
+
+    const examples = Array.isArray(series.examples) ? [...series.examples] : [];
+    if (index >= 0 && index < examples.length) examples.splice(index, 1);
+    await chrome.storage.local.set({ [key]: { ...series, examples } });
+    return { examples };
   });
 }
 
