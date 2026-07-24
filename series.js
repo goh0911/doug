@@ -160,11 +160,12 @@ async function runExtraction(seriesId, opts) {
   let candidates = [];
   let success = false;
   try {
-    // 5. Nano セッション作成（8 秒タイムアウト）
+    // 5. Nano セッション作成（30 秒タイムアウト。初回推論はモデルのウォームアップで十数秒かかる）
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 8000);
+    const timeoutId = setTimeout(() => controller.abort(), 30000);
 
-    const session = await self.LanguageModel.create({ temperature: 0 });
+    // topK と temperature は両方指定が必須（片方だけは NotSupportedError）
+    const session = await self.LanguageModel.create({ temperature: 0, topK: 1 });
     let responseText;
     try {
       responseText = await session.prompt(prompt, { signal: controller.signal });
