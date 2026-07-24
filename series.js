@@ -165,7 +165,12 @@ async function runExtraction(seriesId, opts) {
     const timeoutId = setTimeout(() => controller.abort(), 30000);
 
     // topK と temperature は両方指定が必須（片方だけは NotSupportedError）
-    const session = await self.LanguageModel.create({ temperature: 0, topK: 1 });
+    const session = await self.LanguageModel.create({
+      temperature: 0,
+      topK: 1,
+      expectedInputs: [{ type: 'text', languages: ['en', 'ja'] }],
+      expectedOutputs: [{ type: 'text', languages: ['ja', 'en'] }],
+    });
     let responseText;
     try {
       responseText = await session.prompt(prompt, { signal: controller.signal });
