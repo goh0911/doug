@@ -136,11 +136,13 @@ async function detectSeriesWithNano({ title, url, h1, ogTitle } = {}) {
 
   const prompt = buildSeriesDetectionPrompt({ title, url, h1, ogTitle });
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 8000);
+  // 初回推論はモデルのウォームアップで十数秒かかる（実測 ≈18s）ため 30 秒
+  const timeoutId = setTimeout(() => controller.abort(), 30000);
   let responseText = null;
   let session = null;
   try {
-    session = await self.LanguageModel.create({ temperature: 0 });
+    // topK と temperature は両方指定が必須（片方だけは NotSupportedError）
+    session = await self.LanguageModel.create({ temperature: 0, topK: 1 });
     responseText = await session.prompt(prompt, { signal: controller.signal });
   } catch {
     return null;

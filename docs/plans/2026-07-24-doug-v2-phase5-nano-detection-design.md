@@ -60,7 +60,7 @@ detectAndUpdateSeriesIndicator()  [content.js]
           DETECT_SERIES_NANO  [新メッセージ / background.js 内で完結]
             ├ in-flight ロック（キー=url）で同時実行を集約（R5）
             ├ isNanoAvailable() が false → null（R4）
-            ├ 入力サニタイズ → プロンプト構築 → LanguageModel セッション（8秒タイムアウト）
+            ├ 入力サニタイズ → プロンプト構築 → LanguageModel セッション（30秒タイムアウト）
             │   → レスポンスパース → { series, issueNumber } | null
             └ series 有効時: normalizeSeriesName → computeSeriesId
                 → { seriesId, series, issueNumber, source:'nano', confidence:0.5 }
@@ -89,7 +89,7 @@ detectAndUpdateSeriesIndicator()  [content.js]
 ### 変更ファイル
 | ファイル | 変更 |
 |---|---|
-| `background.js` | `DETECT_SERIES_NANO` メッセージハンドラ追加。in-flight `Map`（キー=url）＋ `isNanoAvailable()` ＋ Nano セッション（8秒タイムアウト）＋ `series-nano.js` 純粋関数の組み立て。結果を `computeSeriesId` で seriesId 化して返す |
+| `background.js` | `DETECT_SERIES_NANO` メッセージハンドラ追加。in-flight `Map`（キー=url）＋ `isNanoAvailable()` ＋ Nano セッション（30秒タイムアウト）＋ `series-nano.js` 純粋関数の組み立て。結果を `computeSeriesId` で seriesId 化して返す |
 | `content.js` | `detectAndUpdateSeriesIndicator`（IIFE 内）で `detectSeries` 結果が null のとき `DETECT_SERIES_NANO` を投げ、応答で `seriesInfo` / インジケーターを後追い更新 |
 | `manifest.json` / `package.json` | version → **1.13.0** |
 
@@ -163,7 +163,7 @@ ogTitle: {sanitized ogTitle}
 | ケース | 挙動 |
 |---|---|
 | `isNanoAvailable()` false（Nano 非対応） | null 返却 → インジケーターは従来の「📚 検出不可」のまま |
-| セッション作成失敗 / 8 秒タイムアウト（`AbortController`） | null。`session.destroy()` は `finally` で確実に実行 |
+| セッション作成失敗 / 30 秒タイムアウト（`AbortController`） | null。`session.destroy()` は `finally` で確実に実行 |
 | パース失敗（`series` が null/不正） | null |
 | 同一 url の同時実行 | in-flight `Map` で1本に集約（後続呼び出しは進行中 Promise を共有 or スキップ） |
 | content.js が null 応答を受信 | `seriesInfo` は null のまま（副作用なし） |

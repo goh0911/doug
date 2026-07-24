@@ -16,7 +16,7 @@
 - **utils 純粋性:** `chrome.*` / `self.LanguageModel` を `utils/` に持ち込まない（テスト可能性維持）
 - **content.js は IIFE（Classic Script）:** ES Module import 不可。純粋関数のコピーが必要になるのは Task 0 のフォールバック分岐のみ
 - **background.js は ES Module Service Worker:** `import` で `utils/` を使う。`importScripts()` は使わない
-- **Nano セッション:** `self.LanguageModel.create({ temperature: 0 })` → `prompt(text, { signal })` → `finally` で `session.destroy()`。8 秒タイムアウト（`AbortController`）
+- **Nano セッション:** `self.LanguageModel.create({ temperature: 0, topK: 1 })` → `prompt(text, { signal })` → `finally` で `session.destroy()`。30 秒タイムアウト（`AbortController`）。※ `topK` と `temperature` は両方指定が必須（片方だけは `NotSupportedError`）。初回推論はウォームアップで十数秒（実測 ≈18s）かかる
 - **インジェクション対策:** 入力サニタイズ（制御/方向制御/タグ文字除去・区切り記号 `<<<<`/`>>>>`/`[SYSTEM]`/`[DATA]` 無害化・200 字切り詰め）、`[SYSTEM]`/`[DATA]` 分離プロンプト（Phase 4 の `utils/nano-extract.js` と同型）
 - **confidence:** Nano 検出は固定 `0.5`。LLM 自己申告 confidence は使わない
 - **url:** Nano に渡す前にクエリ（`?...`）・フラグメント（`#...`）を除去する
@@ -554,11 +554,13 @@ async function detectSeriesWithNano({ title, url, h1, ogTitle } = {}) {
 
   const prompt = buildSeriesDetectionPrompt({ title, url, h1, ogTitle });
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 8000);
+  // 初回推論はモデルのウォームアップで十数秒かかる（実測 ≈18s）ため 30 秒
+  const timeoutId = setTimeout(() => controller.abort(), 30000);
   let responseText = null;
   let session = null;
   try {
-    session = await self.LanguageModel.create({ temperature: 0 });
+    // topK と temperature は両方指定が必須（片方だけは NotSupportedError）
+    session = await self.LanguageModel.create({ temperature: 0, topK: 1 });
     responseText = await session.prompt(prompt, { signal: controller.signal });
   } catch {
     return null;
