@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { sanitizeDetectionInput, buildSeriesDetectionPrompt } from '../../utils/series-nano.js';
+import { sanitizeDetectionInput, buildSeriesDetectionPrompt, parseSeriesDetectionResponse } from '../../utils/series-nano.js';
 
 describe('sanitizeDetectionInput', () => {
   it('通常の文字列はそのまま（trim される）', () => {
@@ -75,5 +75,69 @@ describe('buildSeriesDetectionPrompt', () => {
 
   it('input が undefined でも例外を投げない', () => {
     expect(() => buildSeriesDetectionPrompt()).not.toThrow();
+  });
+});
+
+describe('parseSeriesDetectionResponse', () => {
+  it('```json ブロックを解析する', () => {
+    const r = parseSeriesDetectionResponse('```json\n{"series":"Immortal Hulk","issueNumber":20}\n```');
+    expect(r).toEqual({ series: 'Immortal Hulk', issueNumber: 20 });
+  });
+
+  it('前置きテキストありでもオブジェクトを抽出する', () => {
+    const r = parseSeriesDetectionResponse('結果は以下です: {"series":"Hulk","issueNumber":1}');
+    expect(r).toEqual({ series: 'Hulk', issueNumber: 1 });
+  });
+
+  it('素のオブジェクト文字列を解析する', () => {
+    const r = parseSeriesDetectionResponse('{"series":"Hulk","issueNumber":null}');
+    expect(r).toEqual({ series: 'Hulk', issueNumber: null });
+  });
+
+  it('series が null なら null を返す', () => {
+    expect(parseSeriesDetectionResponse('{"series":null,"issueNumber":null}')).toBeNull();
+  });
+
+  it('series が空文字なら null を返す', () => {
+    expect(parseSeriesDetectionResponse('{"series":"","issueNumber":1}')).toBeNull();
+  });
+
+  it('series が81文字以上なら null を返す', () => {
+    const long = 'x'.repeat(81);
+    expect(parseSeriesDetectionResponse(`{"series":"${long}","issueNumber":1}`)).toBeNull();
+  });
+
+  it('series が1文字・80文字なら採用する', () => {
+    expect(parseSeriesDetectionResponse('{"series":"A","issueNumber":1}').series).toBe('A');
+    const s80 = 'x'.repeat(80);
+    expect(parseSeriesDetectionResponse(`{"series":"${s80}","issueNumber":1}`).series).toBe(s80);
+  });
+
+  it('issueNumber が範囲外・小数・非数値なら null にする（series は残す）', () => {
+    expect(parseSeriesDetectionResponse('{"series":"H","issueNumber":-1}').issueNumber).toBeNull();
+    expect(parseSeriesDetectionResponse('{"series":"H","issueNumber":100000}').issueNumber).toBeNull();
+    expect(parseSeriesDetectionResponse('{"series":"H","issueNumber":1.5}').issueNumber).toBeNull();
+    expect(parseSeriesDetectionResponse('{"series":"H","issueNumber":"5"}').issueNumber).toBeNull();
+  });
+
+  it('issueNumber が 0・99999 なら採用する', () => {
+    expect(parseSeriesDetectionResponse('{"series":"H","issueNumber":0}').issueNumber).toBe(0);
+    expect(parseSeriesDetectionResponse('{"series":"H","issueNumber":99999}').issueNumber).toBe(99999);
+  });
+
+  it('series の制御文字を除去する', () => {
+    expect(parseSeriesDetectionResponse('{"series":"Hu\\u0000lk","issueNumber":1}').series).toBe('Hulk');
+  });
+
+  it('配列が来たら null を返す', () => {
+    expect(parseSeriesDetectionResponse('[{"series":"H"}]')).toBeNull();
+  });
+
+  it('不正 JSON なら null を返す', () => {
+    expect(parseSeriesDetectionResponse('これは JSON ではありません')).toBeNull();
+  });
+
+  it('非文字列なら null を返す', () => {
+    expect(parseSeriesDetectionResponse(null)).toBeNull();
   });
 });

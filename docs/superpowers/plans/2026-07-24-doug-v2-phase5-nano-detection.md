@@ -456,16 +456,17 @@ export function parseSeriesDetectionResponse(text) {
       try { parsed = JSON.parse(bare[1].trim()); } catch { /* 次を試みる */ }
     }
   }
+  // 全体を試みる（配列判定を正しく行うため、後続の { ... } 抽出より先に実施）
+  // ※ 順序が逆だと `[{"series":"H"}]` で objMatch が配列内オブジェクトを拾い、配列拒否が効かない
+  if (parsed === null) {
+    try { parsed = JSON.parse(text.trim()); } catch { /* 次を試みる */ }
+  }
   // 前置きありなら { ... } を抽出
   if (parsed === null) {
     const objMatch = text.match(/\{[\s\S]*\}/);
     if (objMatch) {
-      try { parsed = JSON.parse(objMatch[0]); } catch { /* 次を試みる */ }
+      try { parsed = JSON.parse(objMatch[0]); } catch { return null; }
     }
-  }
-  // 全体を最後に試みる
-  if (parsed === null) {
-    try { parsed = JSON.parse(text.trim()); } catch { return null; }
   }
 
   if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
