@@ -135,7 +135,10 @@
   // 用語集をプロンプトに載せる上限
   const GLOSSARY_CAP = 30;
 
-  function buildSeriesPromptSection({ seriesName, glossaryLangMap, toneStyle } = {}) {
+  // 例文をプロンプトに載せる上限（Phase 6）
+  const EXAMPLES_CAP = 5;
+
+  function buildSeriesPromptSection({ seriesName, glossaryLangMap, toneStyle, examples } = {}) {
     const entries =
       glossaryLangMap && typeof glossaryLangMap === 'object'
         ? Object.keys(glossaryLangMap)
@@ -154,7 +157,13 @@
       }
     }
 
-    if (entries.length === 0 && !toneInstruction) return '';
+    const exampleList = Array.isArray(examples)
+      ? examples
+          .filter((e) => e && typeof e.original === 'string' && typeof e.translated === 'string')
+          .slice(0, EXAMPLES_CAP)
+      : [];
+
+    if (entries.length === 0 && !toneInstruction && exampleList.length === 0) return '';
 
     const lines = [];
     if (seriesName) lines.push(`このコミックは「${seriesName}」シリーズです。`);
@@ -163,6 +172,10 @@
       entries.forEach((e, i) => lines.push(`${i + 1}. ${e.orig} → ${e.translated}`));
     }
     if (toneInstruction) lines.push(`【訳文の口調】${toneInstruction}`);
+    if (exampleList.length > 0) {
+      lines.push('【翻訳例】以下の対訳と同じ口調・言い回しで訳してください:');
+      exampleList.forEach((e, i) => lines.push(`${i + 1}. ${e.original} → ${e.translated}`));
+    }
     return lines.join('\n');
   }
 
@@ -238,6 +251,7 @@
             seriesName: series.meta && series.meta.name,
             glossaryLangMap,
             toneStyle: series.tone && series.tone.style,
+            examples: series.examples,
           });
         }
       } catch { /* フォールバック */ }
