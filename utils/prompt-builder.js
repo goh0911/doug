@@ -17,6 +17,9 @@ const TONE_INSTRUCTIONS = {
 // 用語集をプロンプトに載せる上限（親設計 §5.4）
 const GLOSSARY_CAP = 30;
 
+// 例文をプロンプトに載せる上限（Phase 6）
+const EXAMPLES_CAP = 5;
+
 // 口調指示文を返す。プリセットは変換、auto/未指定は ''、カスタムは sanitize 済み文字列をそのまま使う。
 function buildToneInstruction(toneStyle) {
   if (!toneStyle || toneStyle === 'auto') return '';
@@ -32,7 +35,7 @@ function buildToneInstruction(toneStyle) {
  * @param {{ seriesName?:string, glossaryLangMap?:Object, toneStyle?:string }} args
  * @returns {string}
  */
-export function buildSeriesPromptSection({ seriesName, glossaryLangMap, toneStyle } = {}) {
+export function buildSeriesPromptSection({ seriesName, glossaryLangMap, toneStyle, examples } = {}) {
   // 用語集: approved のみ・count 降順・上位 GLOSSARY_CAP 件
   const entries =
     glossaryLangMap && typeof glossaryLangMap === 'object'
@@ -45,7 +48,14 @@ export function buildSeriesPromptSection({ seriesName, glossaryLangMap, toneStyl
 
   const toneInstruction = buildToneInstruction(toneStyle);
 
-  if (entries.length === 0 && !toneInstruction) return '';
+  // 例文: 有効な要素のみ・上位 EXAMPLES_CAP 件（Phase 6）
+  const exampleList = Array.isArray(examples)
+    ? examples
+        .filter((e) => e && typeof e.original === 'string' && typeof e.translated === 'string')
+        .slice(0, EXAMPLES_CAP)
+    : [];
+
+  if (entries.length === 0 && !toneInstruction && exampleList.length === 0) return '';
 
   const lines = [];
   if (seriesName) lines.push(`このコミックは「${seriesName}」シリーズです。`);
@@ -54,5 +64,9 @@ export function buildSeriesPromptSection({ seriesName, glossaryLangMap, toneStyl
     entries.forEach((e, i) => lines.push(`${i + 1}. ${e.orig} → ${e.translated}`));
   }
   if (toneInstruction) lines.push(`【訳文の口調】${toneInstruction}`);
+  if (exampleList.length > 0) {
+    lines.push('【翻訳例】以下の対訳と同じ口調・言い回しで訳してください:');
+    exampleList.forEach((e, i) => lines.push(`${i + 1}. ${e.original} → ${e.translated}`));
+  }
   return lines.join('\n');
 }

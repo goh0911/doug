@@ -1025,3 +1025,52 @@ describe('rejectGlossaryCandidate', () => {
     expect(result.status).toBe('not-found');
   });
 });
+
+// ============================================================
+// addExample / removeExample (Phase 6)
+// ============================================================
+describe('addExample / removeExample (Phase 6)', () => {
+  it('ok: 正常追加で examples に入る', async () => {
+    const { recordSeriesTranslation, addExample } = await loadStore();
+    await recordSeriesTranslation({ seriesId: 'ex1', name: 'S', url: 'https://x/', pairs: [] });
+    const r = await addExample('ex1', { original: 'A', translated: 'B' });
+    expect(r.status).toBe('ok');
+    expect(r.examples).toHaveLength(1);
+    expect(r.examples[0]).toMatchObject({ original: 'A', translated: 'B' });
+  });
+
+  it('invalid: サニタイズで空になる入力は拒否', async () => {
+    const { recordSeriesTranslation, addExample } = await loadStore();
+    await recordSeriesTranslation({ seriesId: 'ex2', name: 'S', url: 'https://x/', pairs: [] });
+    const r = await addExample('ex2', { original: '   ', translated: 'B' });
+    expect(r.status).toBe('invalid');
+  });
+
+  it('duplicate: 同一 original+translated は重複拒否', async () => {
+    const { recordSeriesTranslation, addExample } = await loadStore();
+    await recordSeriesTranslation({ seriesId: 'ex3', name: 'S', url: 'https://x/', pairs: [] });
+    await addExample('ex3', { original: 'A', translated: 'B' });
+    const r = await addExample('ex3', { original: 'A', translated: 'B' });
+    expect(r.status).toBe('duplicate');
+    expect(r.examples).toHaveLength(1);
+  });
+
+  it('full: 10件を超える追加は拒否', async () => {
+    const { recordSeriesTranslation, addExample } = await loadStore();
+    await recordSeriesTranslation({ seriesId: 'ex4', name: 'S', url: 'https://x/', pairs: [] });
+    for (let i = 0; i < 10; i++) await addExample('ex4', { original: `O${i}`, translated: `T${i}` });
+    const r = await addExample('ex4', { original: 'O10', translated: 'T10' });
+    expect(r.status).toBe('full');
+    expect(r.examples).toHaveLength(10);
+  });
+
+  it('removeExample: index 指定で削除', async () => {
+    const { recordSeriesTranslation, addExample, removeExample } = await loadStore();
+    await recordSeriesTranslation({ seriesId: 'ex5', name: 'S', url: 'https://x/', pairs: [] });
+    await addExample('ex5', { original: 'A', translated: 'B' });
+    await addExample('ex5', { original: 'C', translated: 'D' });
+    const r = await removeExample('ex5', 0);
+    expect(r.examples).toHaveLength(1);
+    expect(r.examples[0].original).toBe('C');
+  });
+});

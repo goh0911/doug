@@ -367,6 +367,92 @@ function renderGlossaryRows(container, entries, seriesId, targetLang) {
   });
 }
 
+// Phase 6: recentPairs を長い original 順にサンプリング（utils/nano-extract.js の sampleRecentPairs と同期）
+function sampleRecentPairs(pairs, limit) {
+  if (!Array.isArray(pairs)) return [];
+  if (pairs.length <= limit) return pairs;
+  return [...pairs]
+    .sort((a, b) => (b.original?.length ?? 0) - (a.original?.length ?? 0))
+    .slice(0, limit);
+}
+
+// Phase 6: few-shot 例文セクションを描画する
+function renderExamplesSection(container, series, seriesId) {
+  container.replaceChildren();
+
+  const sectionLabel = document.createElement('label');
+  sectionLabel.textContent = '翻訳例（few-shot）';
+  container.appendChild(sectionLabel);
+
+  const examples = Array.isArray(series.examples) ? series.examples : [];
+
+  // 登録済み一覧
+  examples.forEach(function(ex, index) {
+    const row = document.createElement('div');
+    row.className = 'series-meta example-row';
+
+    const text = document.createElement('span');
+    text.textContent = ex.original + ' → ' + ex.translated;
+    row.appendChild(text);
+
+    const delBtn = document.createElement('button');
+    delBtn.className = 'btn-secondary series-edit-btn';
+    delBtn.textContent = '削除';
+    delBtn.addEventListener('click', async function() {
+      const result = await chrome.runtime.sendMessage({
+        type: 'REMOVE_EXAMPLE',
+        payload: { seriesId: seriesId, index: index },
+      });
+      series.examples = (result && result.examples) || [];
+      renderExamplesSection(container, series, seriesId);
+    });
+    row.appendChild(delBtn);
+    container.appendChild(row);
+  });
+
+  // 上限表示
+  if (examples.length >= 10) {
+    const full = document.createElement('div');
+    full.className = 'series-meta';
+    full.textContent = '例文は上限（10件）です。追加するには既存を削除してください。';
+    container.appendChild(full);
+    return;
+  }
+
+  // 候補（recentPairs から sampleRecentPairs で上位提示）
+  const pairs = Array.isArray(series.recentPairs) ? series.recentPairs : [];
+  const candidates = sampleRecentPairs(pairs, 5);
+  if (candidates.length === 0) return;
+
+  const candLabel = document.createElement('div');
+  candLabel.className = 'series-meta';
+  candLabel.textContent = '候補（最近の翻訳から）:';
+  container.appendChild(candLabel);
+
+  candidates.forEach(function(c) {
+    const row = document.createElement('div');
+    row.className = 'series-meta example-candidate-row';
+
+    const text = document.createElement('span');
+    text.textContent = c.original + ' → ' + c.translated;
+    row.appendChild(text);
+
+    const addBtn = document.createElement('button');
+    addBtn.className = 'btn-secondary series-edit-btn';
+    addBtn.textContent = '例文に採用';
+    addBtn.addEventListener('click', async function() {
+      const result = await chrome.runtime.sendMessage({
+        type: 'ADD_EXAMPLE',
+        payload: { seriesId: seriesId, original: c.original, translated: c.translated },
+      });
+      series.examples = (result && result.examples) || series.examples;
+      renderExamplesSection(container, series, seriesId);
+    });
+    row.appendChild(addBtn);
+    container.appendChild(row);
+  });
+}
+
 // Phase 4: 候補セクションを描画する
 function renderCandidateSection(container, series, seriesId, targetLang, nanoAvail) {
   container.replaceChildren();
@@ -790,6 +876,12 @@ async function renderDetail(seriesId) {
   }).catch(function() {
     renderCandidateSection(candidateSection, series, seriesId, targetLang, false);
   });
+
+  // ---- Phase 6: few-shot 例文セクション ----
+  const examplesSection = document.createElement('div');
+  examplesSection.className = 'section detail-field';
+  detailView.appendChild(examplesSection);
+  renderExamplesSection(examplesSection, series, seriesId);
 
   // ---- 削除ボタン ----
   const deleteSection = document.createElement('div');

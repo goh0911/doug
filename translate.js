@@ -46,6 +46,7 @@ export async function handleImageTranslation(imageData, imageUrl, imageDims, opt
           seriesName: series.meta && series.meta.name,
           glossaryLangMap,
           toneStyle: series.tone && series.tone.style,
+          examples: series.examples,
         });
       }
     } catch { /* フォールバック: 層A/Bなし */ }

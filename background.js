@@ -15,6 +15,7 @@ import { detectSeries, computeSeriesId } from './utils/series-detect.js';
 import {
   getSeries, listSeries, recordSeriesTranslation, deleteSeries,
   updateSeriesField, addGlossaryEntry, removeGlossaryEntry, getStorageUsageInfo,
+  addExample, removeExample,
   applyExtractionResult, acquireExtractionLock, rejectGlossaryCandidate,
 } from './series-store.js';
 import { derivePathPrefix } from './utils/url-pattern.js';
@@ -284,6 +285,28 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         sendResponse({ ok: true });
       } catch (err) {
         sendResponse({ error: err.message });
+      }
+      return;
+    }
+
+    if (message.type === 'ADD_EXAMPLE') {
+      try {
+        const { seriesId, original, translated } = message.payload;
+        const result = await addExample(seriesId, { original, translated });
+        sendResponse(result);
+      } catch (err) {
+        sendResponse({ status: 'invalid', examples: [] });
+      }
+      return;
+    }
+
+    if (message.type === 'REMOVE_EXAMPLE') {
+      try {
+        const { seriesId, index } = message.payload;
+        const result = await removeExample(seriesId, index);
+        sendResponse(result);
+      } catch (err) {
+        sendResponse({ examples: [] });
       }
       return;
     }
