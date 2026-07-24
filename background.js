@@ -11,13 +11,14 @@ import {
 } from './whitelist.js';
 import { handleImageTranslation } from './translate.js';
 import { handlePreloadQueue, resumePreloadQueue } from './preload.js';
-import { detectSeries } from './utils/series-detect.js';
+import { detectSeries, computeSeriesId } from './utils/series-detect.js';
 import {
   getSeries, listSeries, recordSeriesTranslation, deleteSeries,
   updateSeriesField, addGlossaryEntry, removeGlossaryEntry, getStorageUsageInfo,
   applyExtractionResult, acquireExtractionLock, rejectGlossaryCandidate,
 } from './series-store.js';
 import { derivePathPrefix } from './utils/url-pattern.js';
+import { buildSeriesDetectionPrompt, parseSeriesDetectionResponse } from './utils/series-nano.js';
 
 // ============================================================
 // マイグレーション: sync → local への移行
@@ -113,6 +114,57 @@ chrome.runtime.onConnect.addListener((port) => {
 });
 
 // ============================================================
+// Phase 5: Nano シリーズ検出 fallback
+// ============================================================
+// SW での LanguageModel 可用性チェック（series.js の isNanoAvailable と同型）
+async function isNanoAvailableBg() {
+  if (typeof self.LanguageModel === 'undefined') return false;
+  try {
+    const cap = await self.LanguageModel.availability();
+    return cap !== 'unavailable';
+  } catch {
+    return false;
+  }
+}
+
+// 同一 url の Nano 検出を集約する in-flight ロック（url -> Promise）
+const nanoDetectionInFlight = new Map();
+
+// title/url/h1/ogTitle から Nano でシリーズを検出する
+async function detectSeriesWithNano({ title, url, h1, ogTitle } = {}) {
+  if (!(await isNanoAvailableBg())) return null;
+
+  const prompt = buildSeriesDetectionPrompt({ title, url, h1, ogTitle });
+  const controller = new AbortController();
+  // 初回推論はモデルのウォームアップで十数秒かかる（実測 ≈18s）ため 30 秒
+  const timeoutId = setTimeout(() => controller.abort(), 30000);
+  let responseText = null;
+  let session = null;
+  try {
+    // topK と temperature は両方指定が必須（片方だけは NotSupportedError）
+    session = await self.LanguageModel.create({ temperature: 0, topK: 1 });
+    responseText = await session.prompt(prompt, { signal: controller.signal });
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timeoutId);
+    if (session) session.destroy();
+  }
+
+  const parsed = parseSeriesDetectionResponse(responseText);
+  if (!parsed || !parsed.series) return null;
+
+  const seriesId = await computeSeriesId(parsed.series);
+  return {
+    seriesId,
+    series: parsed.series,
+    issueNumber: parsed.issueNumber,
+    source: 'nano',
+    confidence: 0.5,
+  };
+}
+
+// ============================================================
 // メッセージハンドラー
 // ============================================================
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
@@ -143,6 +195,25 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       // whitelist 通過後にのみ実行（isWebContentScript チェック済み）
       try {
         const result = await detectSeries(message.payload);
+        sendResponse(result);
+      } catch (err) {
+        sendResponse(null);
+      }
+      return;
+    }
+
+    if (message.type === 'DETECT_SERIES_NANO') {
+      // whitelist 通過後にのみ実行（isWebContentScript チェック済み）
+      // Phase 5: Regex/URL で検出できなかったページの Nano fallback
+      const url = (message.payload && message.payload.url) || '';
+      try {
+        let p = nanoDetectionInFlight.get(url);
+        if (!p) {
+          p = detectSeriesWithNano(message.payload).catch(() => null);
+          nanoDetectionInFlight.set(url, p);
+          p.finally(() => nanoDetectionInFlight.delete(url));
+        }
+        const result = await p;
         sendResponse(result);
       } catch (err) {
         sendResponse(null);

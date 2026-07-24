@@ -486,18 +486,26 @@ JSON配列のみ返してください:
 
   // v2 Phase 1: 現在ページの DETECT_SERIES をリクエストして seriesInfo / インジケーターを更新
   async function detectAndUpdateSeriesIndicator() {
+    const payload = {
+      title: document.title,
+      url: location.href,
+      h1: document.querySelector('h1')?.textContent?.trim() || null,
+      ogTitle: document.querySelector('meta[property="og:title"]')?.content || null,
+    };
     try {
-      seriesInfo = await chrome.runtime.sendMessage({
-        type: 'DETECT_SERIES',
-        payload: {
-          title: document.title,
-          url: location.href,
-          h1: document.querySelector('h1')?.textContent?.trim() || null,
-          ogTitle: document.querySelector('meta[property="og:title"]')?.content || null,
-        },
-      });
+      seriesInfo = await chrome.runtime.sendMessage({ type: 'DETECT_SERIES', payload });
       console.log('[doug] Series detected:', seriesInfo);
       updateSeriesIndicator(seriesInfo);
+
+      // Phase 5: Regex/URL で検出できなければ Nano fallback（後追いでインジケーターを上書き）
+      if (!seriesInfo) {
+        const nanoResult = await chrome.runtime.sendMessage({ type: 'DETECT_SERIES_NANO', payload });
+        if (nanoResult) {
+          seriesInfo = nanoResult;
+          console.log('[doug] Series detected via Nano:', seriesInfo);
+          updateSeriesIndicator(seriesInfo);
+        }
+      }
     } catch {
       seriesInfo = null;
       updateSeriesIndicator(null);
