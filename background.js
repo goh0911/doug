@@ -143,7 +143,12 @@ async function detectSeriesWithNano({ title, url, h1, ogTitle } = {}) {
   let session = null;
   try {
     // topK と temperature は両方指定が必須（片方だけは NotSupportedError）
-    session = await self.LanguageModel.create({ temperature: 0, topK: 1 });
+    session = await self.LanguageModel.create({
+      temperature: 0,
+      topK: 1,
+      expectedInputs: [{ type: 'text', languages: ['en', 'ja'] }],
+      expectedOutputs: [{ type: 'text', languages: ['ja', 'en'] }],
+    });
     responseText = await session.prompt(prompt, { signal: controller.signal });
   } catch {
     return null;
