@@ -1,7 +1,7 @@
 # Doug v2 Phase 5 — Nano シリーズ検出 fallback 設計
 
 作成日: 2026-07-24
-対象バージョン: **2.2.0**
+対象バージョン: **1.13.0**
 前提: Phase 1〜4（シリーズ検出パイプライン / ストレージ・UI / プロンプト注入 / Nano 用語集抽出）実装済み
 
 ---
@@ -91,7 +91,7 @@ detectAndUpdateSeriesIndicator()  [content.js]
 |---|---|
 | `background.js` | `DETECT_SERIES_NANO` メッセージハンドラ追加。in-flight `Map`（キー=url）＋ `isNanoAvailable()` ＋ Nano セッション（8秒タイムアウト）＋ `series-nano.js` 純粋関数の組み立て。結果を `computeSeriesId` で seriesId 化して返す |
 | `content.js` | `detectAndUpdateSeriesIndicator`（IIFE 内）で `detectSeries` 結果が null のとき `DETECT_SERIES_NANO` を投げ、応答で `seriesInfo` / インジケーターを後追い更新 |
-| `manifest.json` / `package.json` | version → **2.2.0** |
+| `manifest.json` / `package.json` | version → **1.13.0** |
 
 ### `utils/series-nano.js` 公開 API
 ```js
@@ -203,7 +203,8 @@ ogTitle: {sanitized ogTitle}
 
 ## 9. バージョン
 
-- **2.2.0**（ロードマップ準拠）。機能追加・既存翻訳結果に影響なし。
+- **1.13.0**（機能追加＝マイナーバンプ。既存翻訳結果に影響なし）。
+  ※ ロードマップ表の当初想定は 2.2.0 だが、実バージョン系列（Phase 3=1.10.0 / Phase 4=1.12.0）に合わせ、機能追加のマイナーバンプとする。
 - `manifest.json` と `package.json` の両方を更新。
 
 ---

@@ -12,7 +12,7 @@
 
 ## Global Constraints
 
-- **バージョン:** 完了時に `manifest.json` と `package.json` の両方を **2.2.0** に更新する
+- **バージョン:** 完了時に `manifest.json` と `package.json` の両方を **1.13.0** に更新する
 - **utils 純粋性:** `chrome.*` / `self.LanguageModel` を `utils/` に持ち込まない（テスト可能性維持）
 - **content.js は IIFE（Classic Script）:** ES Module import 不可。純粋関数のコピーが必要になるのは Task 0 のフォールバック分岐のみ
 - **background.js は ES Module Service Worker:** `import` で `utils/` を使う。`importScripts()` は使わない
@@ -32,7 +32,7 @@
 | `tests/unit/series-nano.test.js` | 新規 | 上記3関数のユニットテスト |
 | `background.js` | 修正 | `DETECT_SERIES_NANO` ハンドラ + `detectSeriesWithNano()` + in-flight ロック + `isNanoAvailableBg()` |
 | `content.js` | 修正 | `detectAndUpdateSeriesIndicator()` で `detectSeries` が null のとき `DETECT_SERIES_NANO` を後追い実行 |
-| `manifest.json` / `package.json` | 修正 | version 2.2.0 |
+| `manifest.json` / `package.json` | 修正 | version 1.13.0 |
 
 ---
 
@@ -718,16 +718,16 @@ git commit -m "feat: integrate Nano detection fallback into content.js (Phase 5)
 - Modify: `manifest.json`
 - Modify: `package.json`
 
-- [ ] **Step 1: バージョンを 2.2.0 に更新**
+- [ ] **Step 1: バージョンを 1.13.0 に更新**
 
 `manifest.json`:
 ```json
-"version": "2.2.0"
+"version": "1.13.0"
 ```
 
 `package.json`:
 ```json
-"version": "2.2.0"
+"version": "1.13.0"
 ```
 
 - [ ] **Step 2: 全ユニットテストを最終確認**
@@ -739,7 +739,7 @@ Expected: PASS（全件）
 
 ```bash
 git add manifest.json package.json
-git commit -m "chore: bump version to 2.2.0 (Phase 5 Nano detection)"
+git commit -m "chore: bump version to 1.13.0 (Phase 5 Nano detection)"
 ```
 
 ---
@@ -752,5 +752,5 @@ git commit -m "chore: bump version to 2.2.0 (Phase 5 Nano detection)"
 - [ ] Regex/URL でヒットするページで Nano が呼ばれない（`DETECT_SERIES_NANO` 不発）ことを確認
 - [ ] null ページで Nano 検出→インジケーター後追い更新を確認
 - [ ] Nano 非対応環境で「検出不可」に安全縮退することを確認
-- [ ] `manifest.json` / `package.json` が 2.2.0
+- [ ] `manifest.json` / `package.json` が 1.13.0
 - [ ] `chrome://extensions/` でエラーバッジなし
