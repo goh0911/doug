@@ -85,3 +85,47 @@ describe('buildSeriesPromptSection - 空のとき', () => {
     expect(section).toContain('【用語集】');
   });
 });
+
+describe('buildSeriesPromptSection - examples (Phase 6)', () => {
+  it('examples を【翻訳例】として注入する（上位5件・順序は用語集→口調→例文）', () => {
+    const s = buildSeriesPromptSection({
+      seriesName: 'Immortal Hulk',
+      glossaryLangMap: { Hulk: { translated: 'ハルク', approved: true, count: 3 } },
+      toneStyle: '硬め',
+      examples: [
+        { original: 'WHO ARE YOU?!', translated: 'お前は誰だ！？' },
+        { original: 'I AM THE HULK.', translated: '私がハルクだ。' },
+      ],
+    });
+    expect(s).toContain('【用語集】');
+    expect(s).toContain('【訳文の口調】');
+    expect(s).toContain('【翻訳例】');
+    expect(s).toContain('1. WHO ARE YOU?! → お前は誰だ！？');
+    expect(s.indexOf('【用語集】')).toBeLessThan(s.indexOf('【訳文の口調】'));
+    expect(s.indexOf('【訳文の口調】')).toBeLessThan(s.indexOf('【翻訳例】'));
+  });
+
+  it('examples は上位5件に制限される', () => {
+    const examples = Array.from({ length: 8 }, (_, i) => ({ original: `O${i}`, translated: `T${i}` }));
+    const s = buildSeriesPromptSection({ examples });
+    expect(s).toContain('5. O4 → T4');
+    expect(s).not.toContain('6. O5');
+  });
+
+  it('examples のみでもセクションを生成する', () => {
+    const s = buildSeriesPromptSection({ examples: [{ original: 'A', translated: 'B' }] });
+    expect(s).toContain('【翻訳例】');
+    expect(s).toContain('1. A → B');
+  });
+
+  it('用語集・口調・examples が全て空なら空文字', () => {
+    expect(buildSeriesPromptSection({ examples: [] })).toBe('');
+    expect(buildSeriesPromptSection({})).toBe('');
+  });
+
+  it('不正な example 要素は除外する', () => {
+    const s = buildSeriesPromptSection({ examples: [{ original: 'A', translated: 'B' }, { original: 'C' }, null] });
+    expect(s).toContain('1. A → B');
+    expect(s).not.toContain('C →');
+  });
+});
