@@ -11,10 +11,11 @@
  * @returns {string}
  */
 function cleanControlChars(s) {
-  // 連続改行・タブを単一空白に（制御文字除去より先に処理）
-  s = s.replace(/[\r\n\t]+/g, ' ');
-  // 残余の制御文字 U+0000-U+001F, U+007F を除去（\r\n\t は上で空白化済み）
-  s = s.replace(/[\x00-\x1F\x7F]/g, '');
+  // 連続改行・タブ・行分離子(U+2028/U+2029/U+0085 NEL)を単一空白に（制御文字除去より先に処理）
+  // ※ U+2028/U+2029/U+0085 追加（2026-07-25 監査 F-1/F-2: 行分離子による多行注入対策）
+  s = s.replace(/[\r\n\t\u2028\u2029\u0085]+/g, ' ');
+  // 残余の制御文字 C0(U+0000-U+001F) / DEL(U+007F) / C1(U+0080-U+009F) を除去（改行系は上で空白化済み）
+  s = s.replace(/[\x00-\x1F\x7F-\x9F]/g, '');
   // Unicode 方向制御 U+202A-U+202E を除去
   s = s.replace(/[‪-‮]/g, '');
   // Unicode 方向制御 U+2066-U+2069 を除去
@@ -92,8 +93,9 @@ export function sanitizeCandidate(candidate) {
     return null;
   }
 
-  // translated のサニタイズ（制御文字・方向制御・タグ文字除去）
-  const cleanTrans = cleanControlChars(trans);
+  // translated のサニタイズ（制御文字・方向制御・タグ文字除去＋区切り記号エスケープ）
+  // ※ escapeDelimiters 追加（2026-07-25 監査 F-1: 入力側 sanitizePairForNano と対称化）
+  const cleanTrans = escapeDelimiters(cleanControlChars(trans));
 
   if (cleanTrans.length === 0) return null;
 
@@ -104,7 +106,7 @@ export function sanitizeCandidate(candidate) {
     const cleanVariants = [...new Set(
       candidate.variants
         .filter((v) => typeof v === 'string')
-        .map((v) => cleanControlChars(v).trim())
+        .map((v) => escapeDelimiters(cleanControlChars(v)).trim())
         .filter((v) => v.length >= 1 && v.length <= 30)
     )];
     if (cleanVariants.length >= 2) {

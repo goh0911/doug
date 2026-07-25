@@ -12,9 +12,9 @@
  */
 function _cleanControlChars(s) {
   // 連続改行・タブを単一空白に（制御文字除去より先に処理）
-  s = s.replace(/[\r\n\t]+/g, ' ');
+  s = s.replace(/[\r\n\t\u2028\u2029\u0085]+/g, ' ');
   // 残余の制御文字 U+0000-U+001F, U+007F を除去
-  s = s.replace(/[\x00-\x1F\x7F]/g, '');
+  s = s.replace(/[\x00-\x1F\x7F-\x9F]/g, '');
   // Unicode 方向制御 U+202A-U+202E を除去
   s = s.replace(/[‪-‮]/g, '');
   // Unicode 方向制御 U+2066-U+2069 を除去
@@ -54,7 +54,9 @@ function _parseCandidatesJson(text) {
     if (c.original.length < 1 || c.original.length > 30) return null;
     if (c.translated.length < 1 || c.translated.length > 30) return null;
     if (!/^[A-Za-z0-9\-.' ]+$/.test(c.original)) return null;
-    const cleanTrans = _cleanControlChars(c.translated);
+    // 区切り記号エスケープ（2026-07-25 監査 F-1: nano-extract.js の escapeDelimiters と同期）
+    const _esc = (s) => s.split('<<<<').join('_').split('>>>>').join('_').split('[SYSTEM]').join('_').split('[DATA]').join('_');
+    const cleanTrans = _esc(_cleanControlChars(c.translated));
     if (cleanTrans.length === 0) return null;
     const result = { original: c.original, translated: cleanTrans };
     // Phase 6-B: 訳ゆれ（variants を重複除去して2件以上で inconsistent）
@@ -62,7 +64,7 @@ function _parseCandidatesJson(text) {
       const cleanVariants = Array.from(new Set(
         c.variants
           .filter((v) => typeof v === 'string')
-          .map((v) => _cleanControlChars(v).trim())
+          .map((v) => _esc(_cleanControlChars(v)).trim())
           .filter((v) => v.length >= 1 && v.length <= 30)
       ));
       if (cleanVariants.length >= 2) {

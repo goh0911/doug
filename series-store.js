@@ -194,9 +194,12 @@ export async function recordSeriesTranslation({ seriesId, name, detectionSource,
       // 新規作成
       const origin = (() => { try { return new URL(url).origin; } catch { return url; } })();
       const pathPrefix = derivePathPrefix(url);
+      // ページ由来のシリーズ名をサニタイズ（2026-07-25 監査 F-2: 制御/行分離子/LLM制御トークン除去）
+      // ※ NL命令文は完全には無害化できないため、これは低減であり完全対策ではない（監査記録参照）
+      const safeName = sanitizeGlossaryText(name, { maxLength: 80 }) ?? seriesId;
       const series = {
         meta: {
-          name: name ?? seriesId,
+          name: safeName,
           detectedAt: now,
           lastVisitedAt: now,
           issueCount: 1,
