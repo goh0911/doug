@@ -452,3 +452,21 @@ describe('sanitizeCandidate - variants (Phase 6-B)', () => {
     expect(r.inconsistent).toBe(true);
   });
 });
+
+describe('mergeCandidates - variants (Phase 6-B)', () => {
+  it('訳ゆれ候補は variants/inconsistent を候補エントリに保存する', () => {
+    const { glossaryLangMap } = mergeCandidates({}, [
+      { original: 'Banner', translated: 'バナー', variants: ['バナー', 'バンナー'], inconsistent: true },
+    ]);
+    expect(glossaryLangMap.Banner).toMatchObject({
+      translated: 'バナー', approved: false, source: 'nano-extract',
+      variants: ['バナー', 'バンナー'], inconsistent: true,
+    });
+  });
+
+  it('通常候補には variants/inconsistent が付かない', () => {
+    const { glossaryLangMap } = mergeCandidates({}, [{ original: 'Hulk', translated: 'ハルク' }]);
+    expect(glossaryLangMap.Hulk.variants).toBeUndefined();
+    expect(glossaryLangMap.Hulk.inconsistent).toBeUndefined();
+  });
+});

@@ -187,6 +187,7 @@ export function mergeCandidates(glossaryLangMap, candidates, rejectedOriginals =
       count: 0,
       addedAt: Date.now(),
       source: 'nano-extract',
+      ...(c.inconsistent && Array.isArray(c.variants) ? { variants: c.variants, inconsistent: true } : {}),
     };
     added++;
   }
