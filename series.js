@@ -545,6 +545,10 @@ function renderCandidateSection(container, series, seriesId, targetLang, nanoAva
     const e = glossaryLangMap[k];
     return e && e.source === 'nano-extract' && e.approved === false;
   });
+  // Phase 6-B: 訳ゆれ候補を上位に
+  pendingKeys.sort(function(a, b) {
+    return (glossaryLangMap[b].inconsistent ? 1 : 0) - (glossaryLangMap[a].inconsistent ? 1 : 0);
+  });
 
   if (pendingKeys.length > 0) {
     const candidateList = document.createElement('div');
@@ -553,23 +557,31 @@ function renderCandidateSection(container, series, seriesId, targetLang, nanoAva
 
     pendingKeys.forEach(function(original) {
       const entry = glossaryLangMap[original];
+      const isInconsistent = entry.inconsistent === true && Array.isArray(entry.variants);
       const row = document.createElement('div');
       row.className = 'nano-candidate-row';
 
       const icon = document.createElement('span');
       icon.className = 'nano-candidate-icon';
-      icon.textContent = '✨';
+      icon.textContent = isInconsistent ? '⚠️' : '✨';
       row.appendChild(icon);
 
       const label = document.createElement('span');
       label.className = 'nano-candidate-label';
-      label.textContent = '自動候補';
+      label.textContent = isInconsistent ? '訳ゆれ' : '自動候補';
       row.appendChild(label);
 
       const termText = document.createElement('span');
       termText.className = 'glossary-text';
       termText.textContent = original + ' → ' + (entry.translated || '');
       row.appendChild(termText);
+
+      if (isInconsistent) {
+        const variantsText = document.createElement('span');
+        variantsText.className = 'nano-candidate-variants';
+        variantsText.textContent = '訳ゆれ: ' + entry.variants.join(' / ');
+        row.appendChild(variantsText);
+      }
 
       const approveBtn = document.createElement('button');
       approveBtn.className = 'btn-primary series-edit-btn';
