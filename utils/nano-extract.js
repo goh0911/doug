@@ -97,7 +97,23 @@ export function sanitizeCandidate(candidate) {
 
   if (cleanTrans.length === 0) return null;
 
-  return { original: orig, translated: cleanTrans };
+  const result = { original: orig, translated: cleanTrans };
+
+  // Phase 6-B: 訳ゆれ（variants を重複除去して2件以上あれば inconsistent）
+  if (Array.isArray(candidate.variants)) {
+    const cleanVariants = [...new Set(
+      candidate.variants
+        .filter((v) => typeof v === 'string')
+        .map((v) => cleanControlChars(v).trim())
+        .filter((v) => v.length >= 1 && v.length <= 30)
+    )];
+    if (cleanVariants.length >= 2) {
+      result.variants = cleanVariants;
+      result.inconsistent = true;
+    }
+  }
+
+  return result;
 }
 
 /**

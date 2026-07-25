@@ -423,3 +423,32 @@ describe('buildExtractionPrompt - 構造', () => {
     expect(p).toContain('<<<<END_PAIRS>>>>');
   });
 });
+
+describe('sanitizeCandidate - variants (Phase 6-B)', () => {
+  it('variants 2件以上で inconsistent を付ける', () => {
+    const r = sanitizeCandidate({ original: 'Banner', translated: 'バナー', variants: ['バナー', 'バンナー'], inconsistent: true });
+    expect(r).toMatchObject({ original: 'Banner', translated: 'バナー', variants: ['バナー', 'バンナー'], inconsistent: true });
+  });
+
+  it('variants 無しは通常候補（variants/inconsistent 付かない）', () => {
+    const r = sanitizeCandidate({ original: 'Hulk', translated: 'ハルク' });
+    expect(r).toEqual({ original: 'Hulk', translated: 'ハルク' });
+  });
+
+  it('variants 1件は訳ゆれ扱いしない', () => {
+    const r = sanitizeCandidate({ original: 'Hulk', translated: 'ハルク', variants: ['ハルク'], inconsistent: true });
+    expect(r.variants).toBeUndefined();
+    expect(r.inconsistent).toBeUndefined();
+  });
+
+  it('variants の重複は除去してから2件判定（重複で1件なら訳ゆれ扱いしない）', () => {
+    const r = sanitizeCandidate({ original: 'Hulk', translated: 'ハルク', variants: ['ハルク', 'ハルク'], inconsistent: true });
+    expect(r.variants).toBeUndefined();
+  });
+
+  it('variants の各要素をサニタイズ（制御文字除去・長さ31は除外）', () => {
+    const r = sanitizeCandidate({ original: 'X', translated: 'バナー', variants: ['バナー', 'ばなー', 'x'.repeat(31)] });
+    expect(r.variants).toEqual(['バナー', 'ばなー']);
+    expect(r.inconsistent).toBe(true);
+  });
+});
