@@ -22,10 +22,10 @@ export async function handleImageTranslation(imageData, imageUrl, imageDims, opt
 
   // キャッシュキー用：現在有効なモデル名を取得
   const MODEL_KEY_MAP = {
-    gemini: settings.geminiModel || 'gemini-3.5-flash-lite',
-    claude: settings.claudeModel || 'claude-sonnet-4-6',
-    openai: settings.openaiModel || 'gpt-5.4-2026-03-05',
-    ollama: settings.ollamaModel || 'qwen3-vl:8b',
+    gemini: settings.geminiModel || 'gemini-3.6-flash',
+    claude: settings.claudeModel || 'claude-sonnet-5',
+    openai: settings.openaiModel || 'gpt-5.6-sol',
+    ollama: settings.ollamaModel || 'qwen3.6:35b-a3b',
   };
   const activeModel = MODEL_KEY_MAP[provider] || '';
 
@@ -88,7 +88,7 @@ export async function handleImageTranslation(imageData, imageUrl, imageDims, opt
     if (provider === 'ollama') {
       translations = await translateImageWithOllama(
         settings.ollamaEndpoint || 'http://localhost:11434',
-        settings.ollamaModel || 'qwen3-vl:8b',
+        settings.ollamaModel || 'qwen3.6:35b-a3b',
         imageData,
         prompt,
         imageDims
@@ -212,7 +212,7 @@ function extractSafeErrorMessage(errBody) {
 async function translateImageWithGemini(apiKey, parsed, prompt, imageDims, model) {
   const { mimeType, base64Data } = parsed;
 
-  const modelName = model || 'gemini-3.5-flash-lite';
+  const modelName = model || 'gemini-3.6-flash';
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(modelName)}:generateContent`;
   const body = JSON.stringify({
     contents: [{
@@ -258,7 +258,7 @@ async function translateImageWithClaude(apiKey, parsed, prompt, imageDims, model
 
   const url = 'https://api.anthropic.com/v1/messages';
   const body = JSON.stringify({
-    model: model || 'claude-sonnet-4-6',
+    model: model || 'claude-sonnet-5',
     max_tokens: 32000,
     messages: [{
       role: 'user',
@@ -311,7 +311,7 @@ async function translateImageWithOpenAI(apiKey, imageDataUrl, prompt, imageDims,
 
   const url = 'https://api.openai.com/v1/chat/completions';
   const body = JSON.stringify({
-    model: model || 'gpt-5.4-2026-03-05',
+    model: model || 'gpt-5.6-sol',
     max_tokens: 32000,
     messages: [{
       role: 'user',

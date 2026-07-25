@@ -227,7 +227,7 @@
 
   async function translateWithOllamaDirect(imageDataUrl) {
     const settings = await chrome.storage.local.get({
-      ollamaModel: 'qwen3-vl:8b',
+      ollamaModel: 'qwen3.6:35b-a3b',
       ollamaEndpoint: 'http://localhost:11434',
       targetLang: 'ja',
     });
