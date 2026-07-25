@@ -7,8 +7,8 @@
 
 // 制御文字・方向制御・タグ文字を除去し、改行/タブを空白化する
 function cleanControlChars(s) {
-  s = s.replace(/[\r\n\t]+/g, ' ');
-  s = s.replace(/[\x00-\x1F\x7F]/g, '');
+  s = s.replace(/[\r\n\t\u2028\u2029\u0085]+/g, ' ');
+  s = s.replace(/[\x00-\x1F\x7F-\x9F]/g, '');
   s = s.replace(/[‪-‮]/g, '');
   s = s.replace(/[⁦-⁩]/g, '');
   s = s.replace(/[​-‏]/g, '');

@@ -7,6 +7,7 @@ import { incrementApiStats } from './stats.js';
 import { getSeries } from './series-store.js';
 import { buildSeriesPromptSection } from './utils/prompt-builder.js';
 import { applyGlossaryPostProcess } from './utils/glossary-substitute.js';
+import { maskSecrets } from './utils/mask-secrets.js';
 
 const LANG_NAMES = {
   ja: '日本語', ko: '韓国語', 'zh-CN': '簡体字中国語', 'zh-TW': '繁体字中国語',
@@ -196,14 +197,15 @@ async function fetchWithRetry(url, options, providerName) {
 }
 
 // APIエラーから機密情報を除去して安全なメッセージを抽出
+// ※ 2026-07-25 監査 F-3: マスクを JSON 分岐にも適用（maskSecrets は utils/mask-secrets.js）
 function extractSafeErrorMessage(errBody) {
   try {
     const parsed = JSON.parse(errBody);
     const msg = parsed?.error?.message || parsed?.error?.type || '';
-    if (msg) return msg.substring(0, 150);
+    if (msg) return maskSecrets(String(msg)).substring(0, 150);
   } catch { /* JSONでない場合はフォールバック */ }
   // 生テキストからAPIキーやURLを除去して短縮
-  return errBody.replace(/key=[^&\s"]+/gi, 'key=***').replace(/sk-[^\s"]+/g, 'sk-***').substring(0, 150);
+  return maskSecrets(errBody).substring(0, 150);
 }
 
 // ============================================================
