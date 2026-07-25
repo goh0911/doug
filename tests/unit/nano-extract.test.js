@@ -470,3 +470,12 @@ describe('mergeCandidates - variants (Phase 6-B)', () => {
     expect(glossaryLangMap.Hulk.inconsistent).toBeUndefined();
   });
 });
+
+describe('buildExtractionPrompt - variants (Phase 6-B)', () => {
+  it('訳ゆれ検出の指示と variants を含む出力例がプロンプトに入る', () => {
+    const p = buildExtractionPrompt([{ original: 'A', translated: 'あ' }], [], []);
+    expect(p).toContain('訳ゆれ検出');
+    expect(p).toContain('variants');
+    expect(p).toContain('inconsistent');
+  });
+});
