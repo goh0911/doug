@@ -1129,3 +1129,56 @@ describe('addExample / removeExample (Phase 6)', () => {
     expect(r.examples[0].original).toBe('C');
   });
 });
+
+// ============================================================
+// glossDefs（Phase 7: 固有名詞解説キャッシュ）
+// ============================================================
+describe('glossDefs', () => {
+  // addGlossaryEntry のテストと同様、put 系 API は既存シリーズを前提とするため
+  // 事前にシリーズを 1 件用意する（既存の glossary も同居させ、破壊されないか検証できるようにする）
+  beforeEach(() => {
+    _store['series:s1'] = {
+      meta: { name: 'Test' },
+      glossary: {
+        ja: { Thor: { translated: 'ソー', count: 1, lastSeenAt: 0, source: 'manual', approved: true } },
+      },
+    };
+  });
+
+  it('未登録シリーズでは空オブジェクトを返す', async () => {
+    const { getGlossDefs } = await loadStore();
+    expect(await getGlossDefs('unknown-series', 'ja')).toEqual({});
+  });
+
+  it('保存した内容を言語別に読み戻せる', async () => {
+    const { getGlossDefs, putGlossDefs } = await loadStore();
+    await putGlossDefs('s1', 'ja', {
+      Hulk: { identity: 'A', powers: 'B。', url: 'https://x/', source: 'en-wikipedia', at: 1 },
+    });
+    const r = await getGlossDefs('s1', 'ja');
+    expect(r.Hulk.identity).toBe('A');
+    expect(await getGlossDefs('s1', 'en')).toEqual({});
+  });
+
+  it('既存の glossary を壊さない', async () => {
+    const { getSeries, putGlossDefs } = await loadStore();
+    await putGlossDefs('s1', 'ja', { Hulk: { identity: 'A', powers: 'B。', at: 1 } });
+    const series = await getSeries('s1');
+    expect(series.glossary).toBeDefined();
+    expect(series.glossary.ja.Thor.translated).toBe('ソー');
+  });
+
+  it('上限を超えた場合は古いものを落として保存する', async () => {
+    const { getGlossDefs, putGlossDefs } = await loadStore();
+    const many = {};
+    for (let i = 0; i < 200; i++) {
+      many[`T${i}`] = { identity: 'あ'.repeat(40), powers: 'い'.repeat(80), url: 'https://x/', source: 'en-wikipedia', at: i };
+    }
+    await putGlossDefs('s1', 'ja', many);
+    const r = await getGlossDefs('s1', 'ja');
+    const bytes = new TextEncoder().encode(JSON.stringify(r)).length;
+    expect(bytes).toBeLessThanOrEqual(16 * 1024);
+    expect(Object.keys(r).length).toBeLessThan(200);
+    expect(r).toHaveProperty('T199'); // 新しいものが残る
+  });
+});

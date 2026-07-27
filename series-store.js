@@ -6,6 +6,7 @@ import { sanitizeGlossaryText, sanitizeToneStyle } from './utils/sanitize.js';
 import { derivePathPrefix } from './utils/url-pattern.js';
 import { sanitizeExample } from './utils/example-utils.js';
 import { sampleRecentPairs, mergeCandidates } from './utils/nano-extract.js';
+import { trimGlossDefs, GLOSSDEFS_SERIES_MAX_BYTES } from './utils/gloss-cache.js';
 
 // ============================================================
 // 容量閾値（§0 実測値に基づく確定値）
@@ -551,4 +552,42 @@ export async function removeExample(seriesId, index) {
  */
 export async function getStorageUsageInfo() {
   return computeUsageInfo();
+}
+
+// ============================================================
+// Phase 7: 固有名詞解説キャッシュ（glossDefs）
+// ============================================================
+
+/**
+ * シリーズの解説キャッシュを言語別に取得する
+ * @param {string} seriesId
+ * @param {string} targetLang
+ * @returns {Promise<object>} 未登録は {}
+ */
+export async function getGlossDefs(seriesId, targetLang) {
+  const series = await getSeries(seriesId);
+  if (!series) return {};
+  const defs = series.glossDefs ?? {};
+  return defs[targetLang] ?? {};
+}
+
+/**
+ * シリーズの解説キャッシュを言語別に置き換える。16 KB を超える分は古い順に落とす。
+ * @param {string} seriesId
+ * @param {string} targetLang
+ * @param {object} entries
+ * @returns {Promise<boolean>} シリーズが存在しなければ false
+ */
+export async function putGlossDefs(seriesId, targetLang, entries) {
+  return withSeriesLock(seriesId, async () => {
+    const key = `series:${seriesId}`;
+    const stored = await chrome.storage.local.get(key);
+    const series = stored[key];
+    if (!series) return false;
+
+    const trimmed = trimGlossDefs(entries, GLOSSDEFS_SERIES_MAX_BYTES);
+    const glossDefs = { ...(series.glossDefs ?? {}), [targetLang]: trimmed };
+    await chrome.storage.local.set({ [key]: { ...series, glossDefs } });
+    return true;
+  });
 }
