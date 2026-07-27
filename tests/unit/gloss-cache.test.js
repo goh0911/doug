@@ -49,8 +49,9 @@ describe('trimGlossDefs', () => {
 
   it('成功エントリ同士では at の古い順に落とす', () => {
     const m = { old: ok(NOW - 10_000), mid: ok(NOW - 5_000), fresh: ok(NOW) };
-    const r = trimGlossDefs(m, 200);
+    const r = trimGlossDefs(m, 250);
     expect(r).toHaveProperty('fresh');
+    expect(r).toHaveProperty('mid');
     expect(r).not.toHaveProperty('old');
   });
 
