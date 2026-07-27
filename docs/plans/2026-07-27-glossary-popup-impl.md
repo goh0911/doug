@@ -192,6 +192,7 @@ git commit -m "refactor: サニタイザを utils/sanitize.js へ集約（挙動
 - Consumes: なし
 - Produces:
   - `WIKIPEDIA_ORIGIN: string`（`'https://en.wikipedia.org/*'`）
+  - `SOURCE_ID: string`（`'en-wikipedia'`。Task 7 のソース契約と `glossDefs.source` が参照する）
   - `buildSearchUrl(term: string, seriesName: string) => string | null`
   - `parseSearchResponse(json: object) => { title: string, extract: string } | null`
   - `extractIntro(extract: string) => string`
