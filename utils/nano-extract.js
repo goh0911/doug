@@ -1,44 +1,7 @@
 // utils/nano-extract.js — Nano 用語集自動抽出 pure 関数（chrome.* 非依存）
 // Phase 4: 翻訳ペアから固有名詞候補を抽出するユーティリティ
 
-// ============================================================
-// 内部 helper: 共通サニタイズ処理
-// ============================================================
-
-/**
- * 制御文字・方向制御・タグ文字・改行正規化を施す
- * @param {string} s
- * @returns {string}
- */
-function cleanControlChars(s) {
-  // 連続改行・タブ・行分離子(U+2028/U+2029/U+0085 NEL)を単一空白に（制御文字除去より先に処理）
-  // ※ U+2028/U+2029/U+0085 追加（2026-07-25 監査 F-1/F-2: 行分離子による多行注入対策）
-  s = s.replace(/[\r\n\t\u2028\u2029\u0085]+/g, ' ');
-  // 残余の制御文字 C0(U+0000-U+001F) / DEL(U+007F) / C1(U+0080-U+009F) を除去（改行系は上で空白化済み）
-  s = s.replace(/[\x00-\x1F\x7F-\x9F]/g, '');
-  // Unicode 方向制御 U+202A-U+202E を除去
-  s = s.replace(/[‪-‮]/g, '');
-  // Unicode 方向制御 U+2066-U+2069 を除去
-  s = s.replace(/[⁦-⁩]/g, '');
-  // Unicode 方向制御 U+200B-U+200F を除去
-  s = s.replace(/[​-‏]/g, '');
-  // タグ文字 U+E0000-U+E007F を除去
-  s = s.replace(/[\u{E0000}-\u{E007F}]/gu, '');
-  return s;
-}
-
-/**
- * 区切り記号をエスケープする（インジェクション対策）
- * @param {string} s
- * @returns {string}
- */
-function escapeDelimiters(s) {
-  s = s.split('<<<<').join('_');
-  s = s.split('>>>>').join('_');
-  s = s.split('[SYSTEM]').join('_');
-  s = s.split('[DATA]').join('_');
-  return s;
-}
+import { cleanControlChars, escapeDelimiters } from './sanitize.js';
 
 // ============================================================
 // 公開 API
