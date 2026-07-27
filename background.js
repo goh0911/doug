@@ -9,7 +9,7 @@ import {
   loadWhitelist, getWhitelistedOrigins,
   saveToWhitelist, removeFromWhitelist, injectToTab,
 } from './whitelist.js';
-import { handleImageTranslation } from './translate.js';
+import { handleImageTranslation, callTextOnlyProvider } from './translate.js';
 import { handlePreloadQueue, resumePreloadQueue } from './preload.js';
 import { detectSeries, computeSeriesId } from './utils/series-detect.js';
 import {
@@ -17,9 +17,16 @@ import {
   updateSeriesField, addGlossaryEntry, removeGlossaryEntry, getStorageUsageInfo,
   addExample, removeExample,
   applyExtractionResult, acquireExtractionLock, rejectGlossaryCandidate,
+  getGlossDefs, putGlossDefs,
 } from './series-store.js';
 import { derivePathPrefix } from './utils/url-pattern.js';
 import { buildSeriesDetectionPrompt, parseSeriesDetectionResponse } from './utils/series-nano.js';
+import {
+  WIKIPEDIA_ORIGIN, SOURCE_ID, buildSearchUrl, parseSearchResponse,
+  extractIntro, extractPowers, passesGate, buildPageUrl,
+} from './utils/wiki-source.js';
+import { buildGlossPrompt, parseGlossResponse } from './utils/gloss-summary.js';
+import { isUsable } from './utils/gloss-cache.js';
 
 // ============================================================
 // マイグレーション: sync → local への移行
@@ -168,6 +175,210 @@ async function detectSeriesWithNano({ title, url, h1, ogTitle } = {}) {
     source: 'nano',
     confidence: 0.5,
   };
+}
+
+// ============================================================
+// Phase 7: 固有名詞解説の取得・生成
+// ============================================================
+
+const GLOSS_FETCH_TIMEOUT_MS = 10_000;
+const GLOSS_NANO_TIMEOUT_MS = 30_000;   // 初回はウォームアップで十数秒かかる
+const GLOSS_CONCURRENCY = 3;            // R-W10: 1 記事平均 35 KB のため絞る
+
+// 同一 (seriesId, lang) の先読みを二重に走らせないためのロック
+const glossInFlight = new Map();
+
+/** Api-User-Agent を組み立てる（User-Agent は Fetch の禁止ヘッダで送れない・R-W1） */
+function glossUserAgent() {
+  const v = chrome.runtime.getManifest().version;
+  return `Doug-Comic-Translator/${v} (https://github.com/; chrome-extension)`;
+}
+
+/** en Wikipedia から 1 語ぶんの素材を取る。検証ゲートを通らなければ null */
+async function fetchWikipediaEntry(term, seriesName) {
+  const url = buildSearchUrl(term, seriesName);
+  if (!url) return null;
+
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), GLOSS_FETCH_TIMEOUT_MS);
+  let json = null;
+  try {
+    const res = await fetch(url, {
+      signal: controller.signal,
+      headers: { 'Api-User-Agent': glossUserAgent() },
+    });
+    if (!res.ok) return null;
+    json = await res.json();
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timeoutId);
+  }
+
+  const page = parseSearchResponse(json);
+  if (!page) return null;
+
+  const intro = extractIntro(page.extract);
+  const powers = extractPowers(page.extract);
+  // 誤ったページを黙って採用しないための唯一の関門（設計書 §1.2）
+  if (!passesGate({ intro, powers })) return null;
+
+  return { title: page.title, url: buildPageUrl(page.title), intro, powers };
+}
+
+/** Nano で解説を生成する。不可・失敗は null */
+async function generateWithNano(prompt) {
+  if (!(await isNanoAvailableBg())) return null;
+
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), GLOSS_NANO_TIMEOUT_MS);
+  let session = null;
+  let text = null;
+  try {
+    // topK と temperature は両方指定が必須（片方だけは NotSupportedError）
+    session = await self.LanguageModel.create({
+      temperature: 0,
+      topK: 1,
+      expectedInputs: [{ type: 'text', languages: ['en', 'ja'] }],
+      expectedOutputs: [{ type: 'text', languages: ['ja', 'en'] }],
+    });
+    text = await session.prompt(prompt, { signal: controller.signal });
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timeoutId);
+    if (session) session.destroy();
+  }
+  return parseGlossResponse(text);
+}
+
+/**
+ * Nano が使えない / 失敗した場合のフォールバック。
+ * エンジン設定が nano 固定なら呼ばない。
+ */
+async function generateGlossWithApi(prompt) {
+  const { glossEngine = 'auto' } = await chrome.storage.local.get('glossEngine');
+  if (glossEngine === 'nano') return null;
+  const text = await callTextOnlyProvider(prompt);
+  return text ? parseGlossResponse(text) : null;
+}
+
+// ソース契約（設計書 §3）。他ソースを足すときはこの配列に 1 要素増やすだけにする。
+// 実装は utils/wiki-source.js の純関数を組み合わせた薄い層に留める。
+const wikipediaSource = {
+  id: SOURCE_ID,
+  origin: WIKIPEDIA_ORIGIN,
+  fetchEntry: fetchWikipediaEntry,   // (term, seriesName) => { title, url, intro, powers } | null
+};
+
+const GLOSS_SOURCES = [wikipediaSource];
+
+/** 全ソースを順に試し、最初に素材を返したものを採用する */
+async function fetchFromSources(term, seriesName) {
+  for (const source of GLOSS_SOURCES) {
+    const granted = await chrome.permissions.contains({ origins: [source.origin] }).catch(() => false);
+    if (!granted) continue;
+    const material = await source.fetchEntry(term, seriesName);
+    if (material) return { ...material, sourceId: source.id };
+  }
+  return null;
+}
+
+/**
+ * 1 語ぶんの解説を作る。成功時はエントリ、失敗時は失敗エントリを返す。
+ * R-SEC-1a: 翻訳とは独立した LLM 呼び出しにする（buildSeriesPromptSection に合流させない）
+ */
+async function buildGlossEntry(term, seriesName, langLabel) {
+  const now = Date.now();
+  const material = await fetchFromSources(term, seriesName);
+  if (!material) return { failed: true, at: now };
+
+  const prompt = buildGlossPrompt({
+    term,
+    intro: material.intro,
+    powers: material.powers,
+    langLabel,
+  });
+
+  const { glossEngine = 'auto' } = await chrome.storage.local.get('glossEngine');
+  let parsed = glossEngine === 'api' ? null : await generateWithNano(prompt);
+  if (!parsed) parsed = await generateGlossWithApi(prompt);
+  if (!parsed) return { failed: true, at: now };
+
+  // R-W18: 記事本文・抽出テキストは保存しない
+  return {
+    identity: parsed.identity,
+    powers: parsed.powers,
+    url: material.url,
+    source: material.sourceId,
+    at: now,
+  };
+}
+
+/** 並列度を絞って順に処理する（R-W10） */
+async function mapWithConcurrency(items, limit, worker) {
+  const results = new Array(items.length);
+  let cursor = 0;
+  const runners = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (cursor < items.length) {
+      const i = cursor++;
+      results[i] = await worker(items[i], i);
+    }
+  });
+  await Promise.all(runners);
+  return results;
+}
+
+/**
+ * 未生成の語だけ生成してキャッシュに書き戻し、表示可能な解説を返す。
+ * @returns {Promise<object>} { 原語: { identity, powers, url } }。失敗語は含めない
+ */
+async function resolveGlossDefs({ seriesId, seriesName, terms, targetLang, langLabel }) {
+  const lockKey = `${seriesId}:${targetLang}`;
+  // 直前の実行が入れ替わる直前まで Map から見えるようにチェーンする。
+  // await の後に別呼び出しが割り込んでも、同じ prev を待った全員が
+  // 同一の新しい run に乗る（3 者以上の同時呼び出しでの上書き・多重生成を防ぐ）
+  const prev = glossInFlight.get(lockKey);
+
+  const run = (async () => {
+    if (prev) await prev.catch(() => {}); // 直前の実行の失敗は無視して続行
+    try {
+      const now = Date.now();
+      const cached = await getGlossDefs(seriesId, targetLang);
+      const wanted = Array.isArray(terms) ? [...new Set(terms.filter((t) => typeof t === 'string' && t))] : [];
+      const missing = wanted.filter((t) => !isUsable(cached[t], now));
+
+      if (missing.length > 0) {
+        const built = await mapWithConcurrency(missing, GLOSS_CONCURRENCY, (term) =>
+          buildGlossEntry(term, seriesName, langLabel)
+        );
+        const next = { ...cached };
+        missing.forEach((term, i) => { next[term] = built[i]; });
+        await putGlossDefs(seriesId, targetLang, next);
+        Object.assign(cached, next);
+      }
+
+      // 表示可能なものだけ返す（失敗エントリは content.js に渡さない）
+      const out = {};
+      for (const term of wanted) {
+        const e = cached[term];
+        if (!e || e.failed === true) continue;
+        out[term] = { identity: e.identity, powers: e.powers, url: e.url };
+      }
+      return out;
+    } catch {
+      // chrome.storage 等の予期しない失敗も「ポップアップ無し」に落とす（設計書 §10）
+      return {};
+    }
+  })();
+
+  glossInFlight.set(lockKey, run);
+  try {
+    return await run;
+  } finally {
+    // 自分より後に入った新しい run のエントリを誤って消さない
+    if (glossInFlight.get(lockKey) === run) glossInFlight.delete(lockKey);
+  }
 }
 
 // ============================================================
@@ -442,6 +653,42 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         sendResponse({ whitelist });
       } catch (err) {
         sendResponse({ error: err.message });
+      }
+      return;
+    }
+
+    if (message.type === 'PREFETCH_GLOSS_DEFS') {
+      // 先読みは応答を待たせない。結果はキャッシュに入り、後続の GET が拾う
+      const { granted } = await chrome.permissions.contains({ origins: [WIKIPEDIA_ORIGIN] })
+        .then((ok) => ({ granted: ok }))
+        .catch(() => ({ granted: false }));
+      if (!granted) { sendResponse({ started: false }); return; }
+
+      resolveGlossDefs({
+        seriesId: message.seriesId,
+        seriesName: message.seriesName,
+        terms: message.terms,
+        targetLang: message.targetLang,
+        langLabel: message.langLabel,
+      }).catch(() => { /* 失敗は表示しない（設計書 §10） */ });
+      sendResponse({ started: true });
+      return;
+    }
+
+    if (message.type === 'GET_GLOSS_DEFS') {
+      const granted = await chrome.permissions.contains({ origins: [WIKIPEDIA_ORIGIN] }).catch(() => false);
+      if (!granted) { sendResponse({ defs: {} }); return; }
+      try {
+        const defs = await resolveGlossDefs({
+          seriesId: message.seriesId,
+          seriesName: message.seriesName,
+          terms: message.terms,
+          targetLang: message.targetLang,
+          langLabel: message.langLabel,
+        });
+        sendResponse({ defs });
+      } catch {
+        sendResponse({ defs: {} });
       }
       return;
     }
