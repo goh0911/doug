@@ -196,8 +196,8 @@ function glossUserAgent() {
   return `Doug-Comic-Translator/${v} (https://github.com/; chrome-extension)`;
 }
 
-/** en Wikipedia から 1 語ぶんの素材を取る。検証ゲートを通らなければ null */
-async function fetchWikipediaEntry(term, seriesName) {
+/** 検索クエリ 1 本を実行し、ゲートを通れば素材を返す。通らなければ null */
+async function tryWikipediaQuery(term, seriesName) {
   const url = buildSearchUrl(term, seriesName);
   if (!url) return null;
 
@@ -226,6 +226,30 @@ async function fetchWikipediaEntry(term, seriesName) {
   if (!passesGate({ intro, powers })) return null;
 
   return { title: page.title, url: buildPageUrl(page.title), intro, powers };
+}
+
+/**
+ * en Wikipedia から 1 語ぶんの素材を取る。検証ゲートを通らなければ null。
+ *
+ * シリーズ名をクエリに混ぜると曖昧さ回避が効く（Vision → Vision (Marvel Comics)）反面、
+ * 用語がシリーズ名に含まれる場合は出版物・一覧記事に引っ張られる（実測）:
+ *   "Hulk" Immortal Hulk comics → The Incredible Hulk (comic book)  能力節なし
+ *   "Daredevil" Daredevil comics → Karen Page                       能力節なし
+ * そこでゲートに落ちたときだけシリーズ名を外して 1 回だけ再試行する。
+ *
+ * 順序が逆だと危険なので入れ替えないこと。シリーズ名無しの単独検索は
+ * "Vision" comics → Scarlet Witch のように **ゲートを通る別人** を引くことがあり、
+ * シリーズ名付きを先に試すからこそフォールバックが安全に成立する。
+ */
+async function fetchWikipediaEntry(term, seriesName) {
+  const first = await tryWikipediaQuery(term, seriesName);
+  if (first) return first;
+
+  // シリーズ名を渡していない場合は再試行しても同じクエリになるので打ち切る
+  const s = String(seriesName ?? '').trim();
+  if (s === '') return null;
+
+  return tryWikipediaQuery(term, '');
 }
 
 /** Nano で解説を生成する。不可・失敗は null */
