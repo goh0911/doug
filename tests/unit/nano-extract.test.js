@@ -480,21 +480,18 @@ describe('buildExtractionPrompt - variants (Phase 6-B)', () => {
   });
 });
 
-describe('sanitizeCandidate - 文の形をした候補の除外（実機で Nano が台詞を丸写しした事例）', () => {
+describe('sanitizeCandidate - 記号始まりの候補の除外（実機で Nano が返した台詞）', () => {
   it('省略記号で始まる台詞を弾く', () => {
     expect(sanitizeCandidate({ original: '... FORTEAN TO SHADOW BASE.', translated: 'こちらフォルティアン' })).toBeNull();
   });
 
-  it('文末記号で終わる複数語の台詞を弾く', () => {
-    expect(sanitizeCandidate({ original: 'NO HUMAN CASUALTIES.', translated: '人間の被害はなし' })).toBeNull();
-    expect(sanitizeCandidate({ original: 'YOU HAVE COMMAND!', translated: '指揮を執れ' })).toBeNull();
-    expect(sanitizeCandidate({ original: 'WHERE IS HE?', translated: '奴はどこだ' })).toBeNull();
-  });
-
-  // 頭字語は空白を含まないため残さなければならない
-  it('末尾ピリオドでも空白の無い頭字語は通す', () => {
-    expect(sanitizeCandidate({ original: 'S.H.I.E.L.D.', translated: 'シールド' }))
-      .toEqual({ original: 'S.H.I.E.L.D.', translated: 'シールド' });
+  // 末尾ピリオドで弾くと実在の名前を巻き添えにするため、その判定は入れない
+  it('末尾ピリオドの実在の名前を落とさない', () => {
+    for (const [o, t] of [['Nick Fury Jr.', 'ニック・フューリー・ジュニア'],
+                          ['Mr. Fixit.', 'ミスター・フィックスイット'],
+                          ['S.H.I.E.L.D.', 'シールド']]) {
+      expect(sanitizeCandidate({ original: o, translated: t })).toEqual({ original: o, translated: t });
+    }
   });
 
   it('通常の固有名詞は通す', () => {

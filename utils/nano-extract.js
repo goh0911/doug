@@ -56,15 +56,15 @@ export function sanitizeCandidate(candidate) {
     return null;
   }
 
-  // 文の形をした候補を弾く（実機で Nano が台詞を丸写しした:
-  //   "... FORTEAN TO SHADOW BASE." (28字) / "NO HUMAN CASUALTIES." (21字)
-  // どちらも30字以内・文字種も適合のため既存の検査を通過していた）
+  // 先頭が英数字でない候補を弾く（実機で Nano が省略記号始まりの台詞を返した:
+  // "... FORTEAN TO SHADOW BASE."）。固有名詞が記号で始まることはないため誤検出しない。
   //
-  // 1) 先頭が英数字でない（"... FORTEAN" のような省略記号始まり）
+  // ※ 当初は「末尾が文末記号かつ空白を含む」も弾いていたが撤回した。
+  //   Nick Fury Jr. / Mr. Fixit. のような実在の名前を巻き添えにするうえ、
+  //   守ろうとしていた台詞丸写しは responseConstraint（撤回済み）が原因だった。
+  //   仮に文が通っても解説側の検証ゲートで落ちて下線が出ないだけなので、
+  //   実在の名前を落とす誤検出のほうが代償が大きい。
   if (!/^[A-Za-z0-9]/.test(orig)) return null;
-  // 2) 末尾が文末記号で、かつ空白を含む（複数語の文）。
-  //    ただし "S.H.I.E.L.D." のような頭字語は空白を含まないので残る
-  if (/[.!?]$/.test(orig) && orig.includes(' ')) return null;
 
   // translated のサニタイズ（制御文字・方向制御・タグ文字除去＋区切り記号エスケープ）
   // ※ escapeDelimiters 追加（2026-07-25 監査 F-1: 入力側 sanitizePairForNano と対称化）
