@@ -366,3 +366,50 @@
   opacity: 1;
   background: rgba(26, 26, 46, 1);
 }
+
+/* 固有名詞解説（Phase 7） */
+/* .mut-overlay-text は display:flex のため、分割後の複数ノードを直接の子要素にすると
+   個々が flex item になり折り返しが崩れる。inner を単一の flex item にして、
+   .mut-overlay-text 本体と同じ折り返し規則をここで踏襲する */
+.doug-gloss-line {
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+
+.doug-gloss-term {
+  text-decoration: underline dotted currentColor;
+  text-underline-offset: 2px;
+  cursor: help;
+}
+
+.doug-gloss-term:focus-visible {
+  outline: 2px solid currentColor;
+  outline-offset: 1px;
+}
+
+.doug-gloss-popup {
+  position: absolute;
+  z-index: 999999;
+  max-width: 280px;
+  padding: 8px 10px;
+  background: #1e1e2e;
+  color: #e0e0e0;
+  border-radius: 8px;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.3);
+  font-size: 13px;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  line-height: 1.5;
+  pointer-events: auto;
+}
+
+.doug-gloss-identity { font-weight: 600; }
+.doug-gloss-powers   { margin-top: 2px; }
+
+.doug-gloss-cite {
+  margin-top: 6px;
+  font-size: 11px;
+  opacity: 0.75;
+}
+
+.doug-gloss-cite a { color: inherit; }

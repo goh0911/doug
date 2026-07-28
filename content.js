@@ -223,6 +223,38 @@
     return { translations: out, totalHits };
   }
 
+  // utils/gloss-highlight.js のコピー。
+  // 変更したら utils/gloss-highlight.js も必ず同期すること。
+  // escapeRegExp は glossary-substitute のコピー由来のものを再利用する（重複定義しない）。
+  function splitByTerms(text, terms) {
+    if (typeof text !== 'string' || text === '') return [];
+
+    const byMatch = new Map();
+    if (Array.isArray(terms)) {
+      for (const t of terms) {
+        if (!t || typeof t.match !== 'string' || t.match === '') continue;
+        if (typeof t.key !== 'string' || t.key === '') continue;
+        if (!byMatch.has(t.match)) byMatch.set(t.match, t.key);
+      }
+    }
+    if (byMatch.size === 0) return [{ text, key: null }];
+
+    // 長い順（ハルクバスター を ハルク より先に）
+    const sorted = [...byMatch.keys()].sort((a, b) => b.length - a.length);
+    const re = new RegExp(sorted.map(escapeRegExp).join('|'), 'g');
+
+    const out = [];
+    let last = 0;
+    let m;
+    while ((m = re.exec(text)) !== null) {
+      if (m.index > last) out.push({ text: text.slice(last, m.index), key: null });
+      out.push({ text: m[0], key: byMatch.get(m[0]) });
+      last = m.index + m[0].length;
+    }
+    if (last < text.length) out.push({ text: text.slice(last), key: null });
+    return out;
+  }
+
   // ============================================================
 
   async function translateWithOllamaDirect(imageDataUrl) {
@@ -520,10 +552,86 @@ JSON配列のみ返してください:
           updateSeriesIndicator(seriesInfo);
         }
       }
+
+      // 設計書 §4.1: 翻訳完了を待たず、シリーズ検出直後に glossary 先読みを開始する（応答は待たない）
+      if (seriesInfo && seriesInfo.seriesId) {
+        triggerGlossPrefetch(seriesInfo.seriesId, seriesInfo.series);
+      }
     } catch {
       seriesInfo = null;
       updateSeriesIndicator(null);
     }
+  }
+
+  const LANG_LABELS = { ja: '日本語', en: 'English', ko: '한국어', 'zh-CN': '简体中文', 'zh-TW': '繁體中文' };
+
+  // 設計書 §4.1: 翻訳完了を待たず、シリーズ検出直後に先読みを開始する。
+  // ページ読み込み時点では本文が画像なので、対象はシリーズの glossary 登録語全体。
+  // glossary は 2 KB 上限のため語数は実質 30 語弱に有界化される。
+  function prefetchGlossDefs(series, targetLang) {
+    if (!series || !series.seriesId) return;
+    const langMap = (series.glossary && series.glossary[targetLang]) || {};
+    const terms = Object.keys(langMap).filter((k) => langMap[k] && langMap[k].approved === true);
+    if (terms.length === 0) return;
+    chrome.runtime.sendMessage({
+      type: 'PREFETCH_GLOSS_DEFS',
+      seriesId: series.seriesId,
+      seriesName: series.name,
+      terms,
+      targetLang,
+      langLabel: LANG_LABELS[targetLang] || '日本語',
+    }).catch(() => { /* 失敗は表示しない */ });
+  }
+
+  // 翻訳完了後に解説を取り込み、描画済みオーバーレイを後追いで span 化する
+  async function loadGlossDefs(series, targetLang) {
+    if (!series || !series.seriesId) return;
+    const { glossEnabled = false } = await chrome.storage.local.get('glossEnabled');
+    if (!glossEnabled) return;
+
+    const langMap = (series.glossary && series.glossary[targetLang]) || {};
+    const terms = Object.keys(langMap).filter((k) => langMap[k] && langMap[k].approved === true);
+    if (terms.length === 0) return;
+
+    let response = null;
+    try {
+      response = await chrome.runtime.sendMessage({
+        type: 'GET_GLOSS_DEFS',
+        seriesId: series.seriesId,
+        seriesName: series.name,
+        terms,
+        targetLang,
+        langLabel: LANG_LABELS[targetLang] || '日本語',
+      });
+    } catch {
+      return; // 失敗は表示しない（設計書 §10）
+    }
+
+    if (!response || !response.defs) return;
+    currentGlossDefs = response.defs;
+    currentGlossTerms = buildGlossTermList(currentGlossDefs, langMap);
+    applyGlossToRenderedOverlays();
+  }
+
+  // DETECT_SERIES / DETECT_SERIES_NANO の応答には glossary が含まれないため、
+  // GET_SERIES で取り直してから prefetchGlossDefs に渡す
+  async function triggerGlossPrefetch(seriesId, seriesName) {
+    try {
+      const { targetLang = 'ja' } = await chrome.storage.local.get('targetLang');
+      const series = await chrome.runtime.sendMessage({ type: 'GET_SERIES', payload: { seriesId } });
+      if (!series) return;
+      prefetchGlossDefs({ seriesId, name: seriesName, glossary: series.glossary }, targetLang);
+    } catch { /* 失敗は表示しない */ }
+  }
+
+  // RECORD_SERIES_TRANSLATION 後の最新 glossary を GET_SERIES で取り直してから loadGlossDefs に渡す
+  async function triggerGlossLoad(seriesId, seriesName) {
+    try {
+      const { targetLang = 'ja' } = await chrome.storage.local.get('targetLang');
+      const series = await chrome.runtime.sendMessage({ type: 'GET_SERIES', payload: { seriesId } });
+      if (!series) return;
+      await loadGlossDefs({ seriesId, name: seriesName, glossary: series.glossary }, targetLang);
+    } catch { /* 失敗は表示しない */ }
   }
 
   // ============================================================
@@ -782,6 +890,9 @@ JSON配列のみ返してください:
             pairs: (response && Array.isArray(response.pairs)) ? response.pairs : [],
           },
         }).catch(() => { /* 記録失敗は翻訳結果に影響させない */ });
+
+        // 翻訳完了後に解説を取り込み、描画済みオーバーレイを後追いで span 化する
+        triggerGlossLoad(seriesInfo.seriesId, seriesInfo.series);
       }
 
       const message = response.fromCache
@@ -1751,6 +1862,157 @@ JSON配列のみ返してください:
     return union <= 0 ? 0 : inter / union;
   }
 
+  // 解説の生成結果（原語 → { identity, powers, url }）と、
+  // 訳文の分割に使う { match: 訳語, key: 原語 } のリスト
+  let currentGlossDefs = {};
+  let currentGlossTerms = [];
+
+  // glossDefs と glossaryLangMap から分割用リストを作る。
+  // 解説の生成に成功した語だけを対象にする（設計書 §7.3）
+  function buildGlossTermList(defs, glossaryLangMap) {
+    if (!defs || !glossaryLangMap) return [];
+    const list = [];
+    for (const original of Object.keys(defs)) {
+      const entry = glossaryLangMap[original];
+      if (!entry || typeof entry.translated !== 'string' || entry.translated === '') continue;
+      list.push({ match: entry.translated, key: original });
+    }
+    return list;
+  }
+
+  // 既に描画済みのオーバーレイを後追いで span 化する。
+  // textContent を読み直して再分割するため、何度呼んでも結果は変わらない（冪等）
+  function applyGlossToRenderedOverlays() {
+    if (currentGlossTerms.length === 0) return;
+    const nodes = document.querySelectorAll('#mut-overlay-container .mut-overlay-text');
+    nodes.forEach((el) => {
+      const text = el.textContent;
+      if (typeof text !== 'string' || text === '') return;
+      renderTranslatedText(el, text, currentGlossTerms);
+    });
+  }
+
+  // 解説つき用語を <span> で包んで描画する。innerHTML は使わない（R-SEC-2）
+  // .mut-overlay-text は display:flex のため、分割ノードをそのまま子要素にすると
+  // 各ノードが個別の flex item になり折り返しが崩れる。1個の inner span にまとめて
+  // flex item を1つに保ち、内部で従来通り折り返させる。
+  function renderTranslatedText(textEl, translated, glossTerms) {
+    const parts = splitByTerms(translated, glossTerms);
+    if (parts.length === 0) { textEl.textContent = translated; return; }
+
+    const nodes = parts.map((part) => {
+      if (!part.key) return document.createTextNode(part.text);
+      const span = document.createElement('span');
+      span.className = 'doug-gloss-term';
+      span.textContent = part.text;
+      span.dataset.glossKey = part.key;
+      span.tabIndex = 0;
+      return span;
+    });
+    const inner = document.createElement('span');
+    inner.className = 'doug-gloss-line';
+    inner.append(...nodes);
+    textEl.replaceChildren(inner);
+  }
+
+  // ============================================================
+  // 固有名詞解説の hover ポップアップ（設計書 §7）
+  // イベントは委譲で 1 個だけ張る（オーバーレイは動的に増えるため）
+  // ============================================================
+  let glossPopupEl = null;
+  let glossHoverTimer = null;
+
+  function hideGlossPopup() {
+    if (glossHoverTimer) { clearTimeout(glossHoverTimer); glossHoverTimer = null; }
+    if (glossPopupEl) { glossPopupEl.remove(); glossPopupEl = null; }
+  }
+
+  function showGlossPopup(spanEl) {
+    const key = spanEl.dataset.glossKey;
+    const def = currentGlossDefs[key];
+    if (!def) return;
+    hideGlossPopup();
+
+    const popup = document.createElement('div');
+    popup.className = 'doug-gloss-popup';
+    popup.setAttribute('role', 'tooltip');
+
+    if (def.identity) {
+      const line = document.createElement('div');
+      line.className = 'doug-gloss-identity';
+      line.textContent = def.identity;
+      popup.appendChild(line);
+    }
+    if (def.powers) {
+      const line = document.createElement('div');
+      line.className = 'doug-gloss-powers';
+      line.textContent = def.powers;
+      popup.appendChild(line);
+    }
+
+    // 出典と帰属表示（CC BY-SA。設計書 §7.2）
+    const cite = document.createElement('div');
+    cite.className = 'doug-gloss-cite';
+    let safeHref = null;
+    try {
+      const u = new URL(def.url);
+      // 生成元 origin 以外を踏ませない
+      if (u.protocol === 'https:' && u.hostname === 'en.wikipedia.org') safeHref = u.href;
+    } catch { /* 不正 URL はリンクにしない */ }
+
+    if (safeHref) {
+      const a = document.createElement('a');
+      a.href = safeHref;
+      a.target = '_blank';
+      a.rel = 'noopener noreferrer';
+      a.textContent = '出典: Wikipedia (CC BY-SA)';
+      cite.appendChild(a);
+    } else {
+      cite.textContent = '出典: Wikipedia (CC BY-SA)';
+    }
+    popup.appendChild(cite);
+
+    const rect = spanEl.getBoundingClientRect();
+    popup.style.left = `${rect.left + window.scrollX}px`;
+    popup.style.top = `${rect.bottom + window.scrollY + 4}px`;
+    document.body.appendChild(popup);
+    glossPopupEl = popup;
+  }
+
+  document.addEventListener('mouseover', (e) => {
+    try {
+      const span = e.target.closest && e.target.closest('.doug-gloss-term');
+      if (!span) return;
+      // 通り過ぎでは出さない
+      if (glossHoverTimer) clearTimeout(glossHoverTimer);
+      glossHoverTimer = setTimeout(() => showGlossPopup(span), 150);
+    } catch { /* 表示に失敗しても翻訳表示には影響させない */ }
+  });
+
+  document.addEventListener('mouseout', (e) => {
+    try {
+      const span = e.target.closest && e.target.closest('.doug-gloss-term');
+      if (span) hideGlossPopup();
+    } catch { /* 表示に失敗しても翻訳表示には影響させない */ }
+  });
+
+  document.addEventListener('focusin', (e) => {
+    try {
+      const span = e.target.closest && e.target.closest('.doug-gloss-term');
+      if (span) showGlossPopup(span);
+    } catch { /* 表示に失敗しても翻訳表示には影響させない */ }
+  });
+
+  document.addEventListener('focusout', () => {
+    try { hideGlossPopup(); } catch { /* noop */ }
+  });
+
+  document.addEventListener('keydown', (e) => {
+    try {
+      if (e.key === 'Escape') hideGlossPopup();
+    } catch { /* noop */ }
+  });
+
   // changedIndices のオーバーレイに黄色ハイライトを付与し、3秒後フェードアウト
   // 新規追加分（既存 DOM に対応する data-index がない）はオーバーレイ要素を生成して追加
   function addRetranslatedOverlays(container, translations, changedIndices) {
@@ -1767,7 +2029,7 @@ JSON配列のみ返してください:
         // 置き換え対象: テキストを更新してハイライト
         const textEl = existing.querySelector('.mut-overlay-text');
         const origEl = existing.querySelector('.mut-overlay-original');
-        if (textEl) textEl.textContent = item.translated;
+        if (textEl) renderTranslatedText(textEl, item.translated, currentGlossTerms);
         if (origEl) origEl.textContent = item.original;
         // 即時黄色表示（transition なし）
         existing.classList.add('mut-retranslated');
@@ -1797,7 +2059,7 @@ JSON配列のみ返してください:
         });
         const textEl = document.createElement('div');
         textEl.className = 'mut-overlay-text';
-        textEl.textContent = item.translated;
+        renderTranslatedText(textEl, item.translated, currentGlossTerms);
         // AI が返す background / border を適用（sanitizeCssValue は content.js 内で定義済み）
         const safeBg     = sanitizeCssValue(item.background);
         const safeBorder = sanitizeCssValue(item.border);
@@ -2123,7 +2385,7 @@ JSON配列のみ返してください:
 
       const textEl = document.createElement('div');
       textEl.className = 'mut-overlay-text';
-      textEl.textContent = item.translated;
+      renderTranslatedText(textEl, item.translated, currentGlossTerms);
       // LLM 応答の CSS 値を sanitize（url() によるネットワーク要求を防ぐ）
       const safeBg = sanitizeCssValue(item.background);
       const safeBorder = sanitizeCssValue(item.border);
