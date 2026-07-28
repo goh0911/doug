@@ -191,6 +191,49 @@ async function detectSeriesWithNano({ title, url, h1, ogTitle } = {}) {
 // （series-store 側の extractionRunning ロックとは別に、SW 内での多重起動を防ぐ）
 const extractionInFlight = new Set();
 
+const EXTRACTION_NANO_TIMEOUT_MS = 60_000;
+
+// Nano はプロンプトで「json だけ出せ」と指示しても散文で返すことがある（実機で確認）。
+// responseConstraint（JSON スキーマ）を渡すと出力形式を強制できる。
+const EXTRACTION_SCHEMA = {
+  type: 'array',
+  items: {
+    type: 'object',
+    properties: {
+      original: { type: 'string' },
+      translated: { type: 'string' },
+      variants: { type: 'array', items: { type: 'string' } },
+      inconsistent: { type: 'boolean' },
+    },
+    required: ['original', 'translated'],
+  },
+};
+
+const GLOSS_SCHEMA = {
+  type: 'object',
+  properties: {
+    identity: { type: 'string' },
+    powers: { type: 'string' },
+  },
+  required: ['identity', 'powers'],
+};
+
+/**
+ * responseConstraint 付きで prompt する。未対応の Chrome では制約無しで再試行する。
+ * @returns {Promise<string>} 応答テキスト
+ */
+async function promptWithSchema(session, prompt, schema, signal) {
+  try {
+    return await session.prompt(prompt, { responseConstraint: schema, signal });
+  } catch (err) {
+    // abort は再試行しない（呼び出し側のタイムアウト）
+    if (err && (err.name === 'AbortError' || (signal && signal.aborted))) throw err;
+    // responseConstraint 未対応（NotSupportedError / TypeError）なら制約無しで再試行。
+    // パーサ側が散文を弾いて [] になるだけで、壊れた候補が入ることはない
+    return session.prompt(prompt, { signal });
+  }
+}
+
 async function runExtractionBg(seriesId) {
   if (!seriesId || extractionInFlight.has(seriesId)) return;
   if (!(await isNanoAvailableBg())) return;
@@ -221,8 +264,9 @@ async function runExtractionBg(seriesId) {
     let success = false;
     let session = null;
     const controller = new AbortController();
-    // 初回推論はモデルのウォームアップで十数秒かかる（実測 ≈18s）ため 30 秒
-    const timeoutId = setTimeout(() => controller.abort(), 30000);
+    // 冷えた状態ではウォームアップ ≈18s + 生成 ≈8s ≒ 26s かかる（実測）。
+    // 30 秒では余裕が無く実機で abort していたため 60 秒にする
+    const timeoutId = setTimeout(() => controller.abort(), EXTRACTION_NANO_TIMEOUT_MS);
     try {
       // topK と temperature は両方指定が必須（片方だけは NotSupportedError）
       session = await self.LanguageModel.create({
@@ -231,10 +275,14 @@ async function runExtractionBg(seriesId) {
         expectedInputs: [{ type: 'text', languages: ['en', 'ja'] }],
         expectedOutputs: [{ type: 'text', languages: ['ja', 'en'] }],
       });
-      const responseText = await session.prompt(prompt, { signal: controller.signal });
+      const responseText = await promptWithSchema(
+        session, prompt, EXTRACTION_SCHEMA, controller.signal
+      );
       candidates = parseCandidatesJson(responseText);
       success = true;
-    } catch {
+    } catch (err) {
+      // 握り潰すと原因が一切追えなくなる（実機でこれに嵌った）。失敗理由は残す
+      console.warn('[gloss] 用語抽出に失敗:', err && err.name, err && err.message);
       success = false;
     } finally {
       clearTimeout(timeoutId);
@@ -255,7 +303,9 @@ async function runExtractionBg(seriesId) {
 // ============================================================
 
 const GLOSS_FETCH_TIMEOUT_MS = 10_000;
-const GLOSS_NANO_TIMEOUT_MS = 30_000;   // 初回はウォームアップで十数秒かかる
+// 冷えた状態のウォームアップは実測 ≈18s。30 秒だと初回の 1 語が abort しやすく、
+// 失敗は 24 時間キャッシュされる（FAILED_TTL_MS）ため代償が大きい。抽出側と揃えて 60 秒
+const GLOSS_NANO_TIMEOUT_MS = 60_000;
 const GLOSS_CONCURRENCY = 3;            // R-W10: 1 記事平均 35 KB のため絞る
 // glossary は 2KB 上限で実質 30 語弱に収まる。1 リクエストあたりの fetch/LLM 呼び出し回数の上限（レビュー Important 1）
 const GLOSS_MAX_TERMS_PER_RUN = 30;
@@ -341,8 +391,10 @@ async function generateWithNano(prompt) {
       expectedInputs: [{ type: 'text', languages: ['en', 'ja'] }],
       expectedOutputs: [{ type: 'text', languages: ['ja', 'en'] }],
     });
-    text = await session.prompt(prompt, { signal: controller.signal });
-  } catch {
+    // 用語抽出と同じく、Nano は指示だけでは JSON を返さないことがあるためスキーマで強制する
+    text = await promptWithSchema(session, prompt, GLOSS_SCHEMA, controller.signal);
+  } catch (err) {
+    console.warn('[gloss] 解説生成に失敗:', err && err.name, err && err.message);
     return null;
   } finally {
     clearTimeout(timeoutId);
