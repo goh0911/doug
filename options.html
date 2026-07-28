@@ -112,6 +112,20 @@
       </label>
     </div>
 
+    <div class="section">
+      <label class="toggle-row">
+        <input type="checkbox" id="glossEnabled">
+        <span>固有名詞の解説ポップアップ（英語版Wikipediaを出典に表示）</span>
+      </label>
+      <div class="field-hint">有効にすると en.wikipedia.org へのアクセス許可を求めます。</div>
+      <label for="glossEngine" style="margin-top:8px">生成エンジン:</label>
+      <select id="glossEngine">
+        <option value="auto">自動（Chrome内蔵AIを優先し、使えなければAPIを使う）</option>
+        <option value="nano">Chrome内蔵AIのみ（APIキーを消費しない）</option>
+        <option value="api">翻訳用APIのみ（品質優先）</option>
+      </select>
+    </div>
+
     <div class="section" id="whitelistSection" style="display:none">
       <label>カスタムサイト</label>
       <table class="whitelist-table">
