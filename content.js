@@ -568,8 +568,11 @@ JSON配列のみ返してください:
   // 設計書 §4.1: 翻訳完了を待たず、シリーズ検出直後に先読みを開始する。
   // ページ読み込み時点では本文が画像なので、対象はシリーズの glossary 登録語全体。
   // glossary は 2 KB 上限のため語数は実質 30 語弱に有界化される。
-  function prefetchGlossDefs(series, targetLang) {
+  async function prefetchGlossDefs(series, targetLang) {
     if (!series || !series.seriesId) return;
+    // OFF 中は Wikipedia fetch や生成 API 呼び出しを一切発生させない（既定 false）
+    const { glossEnabled = false } = await chrome.storage.local.get('glossEnabled');
+    if (!glossEnabled) return;
     const langMap = (series.glossary && series.glossary[targetLang]) || {};
     const terms = Object.keys(langMap).filter((k) => langMap[k] && langMap[k].approved === true);
     if (terms.length === 0) return;
@@ -620,7 +623,9 @@ JSON配列のみ返してください:
       const { targetLang = 'ja' } = await chrome.storage.local.get('targetLang');
       const series = await chrome.runtime.sendMessage({ type: 'GET_SERIES', payload: { seriesId } });
       if (!series) return;
-      prefetchGlossDefs({ seriesId, name: seriesName, glossary: series.glossary }, targetLang);
+      // prefetchGlossDefs は非同期になったが（glossEnabled 判定のため）、
+      // ここで await して例外を上の try/catch に集約する（未処理rejection防止）
+      await prefetchGlossDefs({ seriesId, name: seriesName, glossary: series.glossary }, targetLang);
     } catch { /* 失敗は表示しない */ }
   }
 
@@ -1928,6 +1933,9 @@ JSON配列のみ返してください:
   }
 
   function showGlossPopup(spanEl) {
+    // 150ms の遅延中に renderTranslatedText の再描画で span が差し替えられている場合、
+    // getBoundingClientRect() が全ゼロを返しポップアップが左上に取り残されるため何もしない
+    if (!spanEl.isConnected) return;
     const key = spanEl.dataset.glossKey;
     const def = currentGlossDefs[key];
     if (!def) return;
