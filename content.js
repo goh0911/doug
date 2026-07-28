@@ -580,7 +580,14 @@ JSON配列のみ返してください:
     const { glossEngine = 'auto' } = await chrome.storage.local.get('glossEngine');
     if (glossEngine === 'api') return;
     const langMap = (series.glossary && series.glossary[targetLang]) || {};
-    const terms = Object.keys(langMap).filter((k) => langMap[k] && langMap[k].approved === true);
+    // 解説ポップアップは未承認候補（Nano 自動抽出の approved:false）も対象にする。
+    // 層B置換（utils/glossary-substitute.js）が approved を要求するのは訳文を書き換えるためで、
+    // 解説は誤った語なら background 側の検証ゲートで落ちて何も表示されない。危険度が違う。
+    // ※ 層B置換側の approved ゲートは維持すること（訳文汚染を防ぐ唯一の関門）
+    const terms = Object.keys(langMap).filter((k) => {
+      const e = langMap[k];
+      return e && typeof e.translated === 'string' && e.translated !== '';
+    });
     if (terms.length === 0) return;
     chrome.runtime.sendMessage({
       type: 'PREFETCH_GLOSS_DEFS',
@@ -599,7 +606,14 @@ JSON配列のみ返してください:
     if (!glossEnabled) return;
 
     const langMap = (series.glossary && series.glossary[targetLang]) || {};
-    const terms = Object.keys(langMap).filter((k) => langMap[k] && langMap[k].approved === true);
+    // 解説ポップアップは未承認候補（Nano 自動抽出の approved:false）も対象にする。
+    // 層B置換（utils/glossary-substitute.js）が approved を要求するのは訳文を書き換えるためで、
+    // 解説は誤った語なら background 側の検証ゲートで落ちて何も表示されない。危険度が違う。
+    // ※ 層B置換側の approved ゲートは維持すること（訳文汚染を防ぐ唯一の関門）
+    const terms = Object.keys(langMap).filter((k) => {
+      const e = langMap[k];
+      return e && typeof e.translated === 'string' && e.translated !== '';
+    });
     if (terms.length === 0) return;
 
     let response = null;
