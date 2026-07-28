@@ -193,6 +193,9 @@ const extractionInFlight = new Set();
 
 const EXTRACTION_NANO_TIMEOUT_MS = 60_000;
 
+// 1 回の抽出で Nano に渡すペア数の上限（実機実測で 10〜20 が最適域・下の詳細コメント参照）
+const EXTRACTION_PAIRS_PER_RUN = 20;
+
 // Nano はプロンプトで「json だけ出せ」と指示しても散文で返すことがある（実機で確認）。
 // responseConstraint（JSON スキーマ）を渡すと出力形式を強制できる。
 const EXTRACTION_SCHEMA = {
@@ -250,7 +253,16 @@ async function runExtractionBg(seriesId) {
       return;
     }
 
-    const sanitizedPairs = series.recentPairs.map(sanitizePairForNano).filter(Boolean);
+    // recentPairs 全件（上限50）を渡すと Nano が「固有名詞を抜く」に失敗して台詞を
+    // 丸写しし始め、出力トークンが爆発して 60 秒でも終わらない（実機実測）:
+    //   ペア 5件 → 76.7秒 / 台詞まるごと     ペア10件 →  6.4秒 / 固有名詞 ✅
+    //   ペア20件 →  5.4秒 / 固有名詞 ✅      ペア50件 → 65.1秒 / 台詞まるごと
+    // 遅さは原因ではなく出力破綻の症状。10〜20 件が最適域なので上限を設ける。
+    // （保存側は既に sampleRecentPairs(pairs, 5) で絞っており、抽出側だけ全件だった）
+    const sanitizedPairs = series.recentPairs
+      .slice(0, EXTRACTION_PAIRS_PER_RUN)
+      .map(sanitizePairForNano)
+      .filter(Boolean);
     // series.js の runExtraction と同じく 'ja' 固定（両者の挙動を揃えるため）
     const targetLang = 'ja';
     const glossaryLangMap = (series.glossary && series.glossary[targetLang]) || {};
