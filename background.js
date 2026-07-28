@@ -184,6 +184,8 @@ async function detectSeriesWithNano({ title, url, h1, ogTitle } = {}) {
 const GLOSS_FETCH_TIMEOUT_MS = 10_000;
 const GLOSS_NANO_TIMEOUT_MS = 30_000;   // 初回はウォームアップで十数秒かかる
 const GLOSS_CONCURRENCY = 3;            // R-W10: 1 記事平均 35 KB のため絞る
+// glossary は 2KB 上限で実質 30 語弱に収まる。1 リクエストあたりの fetch/LLM 呼び出し回数の上限（レビュー Important 1）
+const GLOSS_MAX_TERMS_PER_RUN = 30;
 
 // 同一 (seriesId, lang) の先読みを二重に走らせないためのロック
 const glossInFlight = new Map();
@@ -346,16 +348,38 @@ async function resolveGlossDefs({ seriesId, seriesName, terms, targetLang, langL
       const now = Date.now();
       const cached = await getGlossDefs(seriesId, targetLang);
       const wanted = Array.isArray(terms) ? [...new Set(terms.filter((t) => typeof t === 'string' && t))] : [];
-      const missing = wanted.filter((t) => !isUsable(cached[t], now));
+      let missing = wanted.filter((t) => !isUsable(cached[t], now));
+
+      // 1 リクエストあたりの fetch/LLM 呼び出し回数に上限を設ける（レビュー Important 1）。
+      // 超過分は今回は処理しない（黙って落とさず記録だけ残す）
+      if (missing.length > GLOSS_MAX_TERMS_PER_RUN) {
+        console.debug(`[gloss] missing terms capped: ${missing.length} -> ${GLOSS_MAX_TERMS_PER_RUN}`, seriesId, targetLang);
+        missing = missing.slice(0, GLOSS_MAX_TERMS_PER_RUN);
+      }
 
       if (missing.length > 0) {
-        const built = await mapWithConcurrency(missing, GLOSS_CONCURRENCY, (term) =>
-          buildGlossEntry(term, seriesName, langLabel)
-        );
-        const next = { ...cached };
-        missing.forEach((term, i) => { next[term] = built[i]; });
-        await putGlossDefs(seriesId, targetLang, next);
-        Object.assign(cached, next);
+        // series レコードが無いと putGlossDefs は何も保存せず false を返す（isUsable の失敗抑制が
+        // 効かなくなり、毎回同じ語を再フェッチし続ける）。先にレコードの有無を確認し、無ければ
+        // そもそも fetch/LLM を開始しない（レビュー Important 2）
+        const seriesExists = await getSeries(seriesId);
+        if (!seriesExists) {
+          console.debug('[gloss] series record not found, skip generation:', seriesId);
+        } else {
+          // 1 語の失敗（chrome.storage の reject 等）でバッチ全体を巻き添えにしない。
+          // 失敗語は failed エントリとして扱い、他の語の結果とキャッシュ書き込みを守る（レビュー Important 3）
+          const built = await mapWithConcurrency(missing, GLOSS_CONCURRENCY, (term) =>
+            buildGlossEntry(term, seriesName, langLabel).catch(() => ({ failed: true, at: now }))
+          );
+          const next = { ...cached };
+          missing.forEach((term, i) => { next[term] = built[i]; });
+          const stored = await putGlossDefs(seriesId, targetLang, next);
+          if (stored) {
+            Object.assign(cached, next);
+          } else {
+            // 直前の存在確認から書き込みまでの間に series が削除された等のレース。戻り値を捨てず記録する
+            console.debug('[gloss] putGlossDefs failed after existence check (race?):', seriesId, targetLang);
+          }
+        }
       }
 
       // 表示可能なものだけ返す（失敗エントリは content.js に渡さない）
@@ -658,6 +682,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     }
 
     if (message.type === 'PREFETCH_GLOSS_DEFS') {
+      // 不正なメッセージ（seriesId/targetLang 欠落）は fetch/LLM バッチを始める前に弾く（レビュー Important 2）
+      if (!message.seriesId || !message.targetLang) { sendResponse({ started: false }); return; }
       // 先読みは応答を待たせない。結果はキャッシュに入り、後続の GET が拾う
       const { granted } = await chrome.permissions.contains({ origins: [WIKIPEDIA_ORIGIN] })
         .then((ok) => ({ granted: ok }))
@@ -676,6 +702,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     }
 
     if (message.type === 'GET_GLOSS_DEFS') {
+      // 不正なメッセージ（seriesId/targetLang 欠落）は fetch/LLM バッチを始める前に弾く（レビュー Important 2）
+      if (!message.seriesId || !message.targetLang) { sendResponse({ defs: {} }); return; }
       const granted = await chrome.permissions.contains({ origins: [WIKIPEDIA_ORIGIN] }).catch(() => false);
       if (!granted) { sendResponse({ defs: {} }); return; }
       try {

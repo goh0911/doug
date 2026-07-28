@@ -405,22 +405,29 @@ async function translateImageWithOllama(endpoint, model, imageData, prompt, imag
 // 画像翻訳の経路（handleImageTranslation）とは独立させる（R-SEC-1a）
 // ============================================================
 
+// 解説生成のフォールバック呼び出し全体（設定取得〜応答受信）を打ち切るまでの上限
+// （レビュー Important 1: fetchWithRetry の 429/503 バックオフが無制限に伸びるのを防ぐ）
+const GLOSS_API_TIMEOUT_MS = 30_000;
+
 /**
  * 設定済みプロバイダにテキストのみのプロンプトを投げ、生の応答文字列を返す。
  * @param {string} prompt
  * @returns {Promise<string|null>} 失敗時は null（例外を投げない）
  */
 export async function callTextOnlyProvider(prompt) {
-  const settings = await getSettings();
-  const provider = settings.apiProvider || 'gemini';
-
-  let apiKey = null;
-  if (provider !== 'ollama') {
-    apiKey = settings[PROVIDER_KEY_MAP[provider]];
-    if (!apiKey) return null;
-  }
-
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), GLOSS_API_TIMEOUT_MS);
   try {
+    // getSettings() の失敗も「例外を投げない」契約に含める（try の外だった旧実装は JSDoc と矛盾）
+    const settings = await getSettings();
+    const provider = settings.apiProvider || 'gemini';
+
+    let apiKey = null;
+    if (provider !== 'ollama') {
+      apiKey = settings[PROVIDER_KEY_MAP[provider]];
+      if (!apiKey) return null;
+    }
+
     if (provider === 'gemini') {
       const model = settings.geminiModel || 'gemini-3.6-flash';
       const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`;
@@ -431,6 +438,7 @@ export async function callTextOnlyProvider(prompt) {
           contents: [{ parts: [{ text: prompt }] }],
           generationConfig: { temperature: 0, maxOutputTokens: 512 },
         }),
+        signal: controller.signal,
       }, 'Gemini');
       if (!res.ok) return null;
       const data = await res.json();
@@ -452,6 +460,7 @@ export async function callTextOnlyProvider(prompt) {
           max_tokens: 512,
           messages: [{ role: 'user', content: [{ type: 'text', text: prompt }] }],
         }),
+        signal: controller.signal,
       }, 'Claude');
       if (!res.ok) return null;
       const data = await res.json();
@@ -468,6 +477,7 @@ export async function callTextOnlyProvider(prompt) {
           max_tokens: 512,
           messages: [{ role: 'user', content: prompt }],
         }),
+        signal: controller.signal,
       }, 'ChatGPT');
       if (!res.ok) return null;
       const data = await res.json();
@@ -487,6 +497,7 @@ export async function callTextOnlyProvider(prompt) {
           messages: [{ role: 'user', content: prompt }],
           stream: false,
         }),
+        signal: controller.signal,
       }, 'Ollama');
       if (!res.ok) return null;
       const data = await res.json();
@@ -494,6 +505,8 @@ export async function callTextOnlyProvider(prompt) {
     }
   } catch {
     return null;
+  } finally {
+    clearTimeout(timeoutId);
   }
   return null;
 }
