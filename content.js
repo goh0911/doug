@@ -1932,9 +1932,14 @@ JSON配列のみ返してください:
   // ============================================================
   let glossPopupEl = null;
   let glossHoverTimer = null;
+  // role="tooltip" の内容をスクリーンリーダーに関連付けるための id（設計書 §7.2）。
+  // ポップアップは常に1個しか存在しないため固定 id で足りる
+  const GLOSS_POPUP_ID = 'doug-gloss-popup';
+  let glossPopupSpanEl = null; // aria-describedby を設定した span（hideGlossPopup で解除する）
 
   function hideGlossPopup() {
     if (glossHoverTimer) { clearTimeout(glossHoverTimer); glossHoverTimer = null; }
+    if (glossPopupSpanEl) { glossPopupSpanEl.removeAttribute('aria-describedby'); glossPopupSpanEl = null; }
     if (glossPopupEl) { glossPopupEl.remove(); glossPopupEl = null; }
   }
 
@@ -1948,6 +1953,7 @@ JSON配列のみ返してください:
     hideGlossPopup();
 
     const popup = document.createElement('div');
+    popup.id = GLOSS_POPUP_ID;
     popup.className = 'doug-gloss-popup';
     popup.setAttribute('role', 'tooltip');
 
@@ -1986,11 +1992,20 @@ JSON配列のみ返してください:
     }
     popup.appendChild(cite);
 
+    // overlayContainer は position:fixed でビューポート座標に追従する（observePosition）。
+    // ポップアップもビューポート座標系に揃え、document.body ではなく getUIParent() の
+    // 配下に置く（<dialog open> のリーダーでは top layer の下に document.body 配置の
+    // UI が隠れるため。最終レビュー Important 2）
     const rect = spanEl.getBoundingClientRect();
-    popup.style.left = `${rect.left + window.scrollX}px`;
-    popup.style.top = `${rect.bottom + window.scrollY + 4}px`;
-    document.body.appendChild(popup);
+    popup.style.left = `${rect.left}px`;
+    popup.style.top = `${rect.bottom + 4}px`;
+    getUIParent().appendChild(popup);
     glossPopupEl = popup;
+
+    // スクリーンリーダーで span にフォーカスしたときポップアップの内容が読み上げられるよう
+    // 関連付ける（設計書 §7.2。最終レビュー Minor 5）
+    spanEl.setAttribute('aria-describedby', GLOSS_POPUP_ID);
+    glossPopupSpanEl = spanEl;
   }
 
   document.addEventListener('mouseover', (e) => {
@@ -2631,6 +2646,14 @@ JSON配列のみ返してください:
   function clearOverlays() {
     clearPanelDebug();
     _lastPanelGroups = null;
+    // glossPopupEl は overlayContainer の外（getUIParent() 直下）にあるため、
+    // overlayContainer を消しても連動して消えない。カーソル下から要素が消えても
+    // mouseout は確実には発火しないため、ここで明示的に消して孤立させない。
+    // currentGlossDefs/currentGlossTerms も同時にリセットし、SPA遷移後に前ページの
+    // キャラ解説が残らないようにする（最終レビュー Important 4）
+    hideGlossPopup();
+    currentGlossDefs = {};
+    currentGlossTerms = [];
     if (overlayContainer) {
       if (overlayContainer._cleanup) overlayContainer._cleanup();
       overlayContainer.remove();

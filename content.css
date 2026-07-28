@@ -389,7 +389,9 @@
 }
 
 .doug-gloss-popup {
-  position: absolute;
+  /* overlayContainer と同じビューポート座標系に揃える（content.js 側で
+     getBoundingClientRect() をスクロールオフセット無しで使う。最終レビュー Important 2） */
+  position: fixed;
   z-index: 999999;
   max-width: 280px;
   padding: 8px 10px;
