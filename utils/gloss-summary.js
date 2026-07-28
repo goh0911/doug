@@ -14,6 +14,9 @@ const POWERS_INPUT_MAX = 1500;
 /** 文末とみなす記号 */
 const SENTENCE_END = ['。', '．', '！', '？', '.', '!', '?'];
 
+/** フィールドの最小文字数（R-W13）。極端に短い抽出結果はポップアップを出さない */
+const FIELD_MIN_LENGTH = 2;
+
 /** 入力フィールドをサニタイズして切り詰める */
 function prepare(s, max) {
   return escapeDelimiters(cleanControlChars(String(s ?? ''))).trim().slice(0, max);
@@ -72,12 +75,17 @@ export function truncateAtSentence(text, max) {
   return idx >= 0 ? head.slice(0, idx + 1) : '';
 }
 
-/** 1 フィールドを検証・整形する。不正なら空文字 */
+/**
+ * 1 フィールドを検証・整形する。不正・極端に短い（R-W13）場合は空文字。
+ * 「両方空なら null」は呼び出し側（parseGlossResponse）の既存ロジックがそのまま処理する。
+ */
 function normalizeField(value, max) {
   if (typeof value !== 'string') return '';
   const clean = cleanControlChars(value).trim();
   if (clean.length === 0) return '';
-  return truncateAtSentence(clean, max);
+  const truncated = truncateAtSentence(clean, max);
+  if (truncated.length > 0 && truncated.length < FIELD_MIN_LENGTH) return '';
+  return truncated;
 }
 
 /**

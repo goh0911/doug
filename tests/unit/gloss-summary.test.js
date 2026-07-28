@@ -52,11 +52,11 @@ describe('parseGlossResponse', () => {
   });
 
   it('素の JSON を解析する', () => {
-    expect(parseGlossResponse('{"identity":"A","powers":"B"}')).toEqual({ identity: 'A', powers: 'B' });
+    expect(parseGlossResponse('{"identity":"AB","powers":"CD"}')).toEqual({ identity: 'AB', powers: 'CD' });
   });
 
   it('前置きがあっても { } を抽出する', () => {
-    expect(parseGlossResponse('はい:\n{"identity":"A","powers":"B"}')).toEqual({ identity: 'A', powers: 'B' });
+    expect(parseGlossResponse('はい:\n{"identity":"AB","powers":"CD"}')).toEqual({ identity: 'AB', powers: 'CD' });
   });
 
   it('上限超過は句点で切る（R-W16。文中では切らない）', () => {
@@ -74,6 +74,22 @@ describe('parseGlossResponse', () => {
   it('両方とも不正なら null', () => {
     expect(parseGlossResponse('{"identity":123,"powers":null}')).toBeNull();
     expect(parseGlossResponse('{"identity":"","powers":""}')).toBeNull();
+  });
+
+  // R-W13: 抽出結果が極端に短い場合はポップアップを出さない
+  it('1 文字は極端に短いとみなして空文字にする（R-W13）', () => {
+    const r = parseGlossResponse('{"identity":"彼","powers":""}');
+    expect(r).toBeNull();
+  });
+
+  it('一方が極端に短くても、もう一方が十分な長さなら残す（R-W13）', () => {
+    const r = parseGlossResponse('{"identity":"彼","powers":"瞬間移動する。"}');
+    expect(r).toEqual({ identity: '', powers: '瞬間移動する。' });
+  });
+
+  it('2 文字は下限を満たすのでそのまま通す（R-W13 境界値）', () => {
+    const r = parseGlossResponse('{"identity":"AB","powers":"CD"}');
+    expect(r).toEqual({ identity: 'AB', powers: 'CD' });
   });
 
   it('JSON でなければ null', () => {
