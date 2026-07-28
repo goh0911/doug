@@ -1908,6 +1908,12 @@ JSON配列のみ返してください:
   // 各ノードが個別の flex item になり折り返しが崩れる。1個の inner span にまとめて
   // flex item を1つに保ち、内部で従来通り折り返させる。
   function renderTranslatedText(textEl, translated, glossTerms) {
+    // パネル再翻訳等でこの textEl 配下の span を丸ごと差し替える場合、その中に現在
+    // ポップアップ中の span が含まれていれば replaceChildren で detach される前に明示的に
+    // 閉じる。mouseout は要素が消えたときに確実には発火しないため頼れない
+    // （最終レビュー Important 4 と同種の孤立ポップアップ問題）
+    if (glossPopupSpanEl && textEl.contains(glossPopupSpanEl)) hideGlossPopup();
+
     const parts = splitByTerms(translated, glossTerms);
     if (parts.length === 0) { textEl.textContent = translated; return; }
 
