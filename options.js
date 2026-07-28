@@ -253,7 +253,10 @@ document.addEventListener('DOMContentLoaded', async () => {
   $('ollamaEndpoint').value = settings.ollamaEndpoint;
   $('prefetch').checked = settings.prefetch;
   $('imagePreprocess').checked = settings.imagePreprocess;
-  $('glossEnabled').checked = settings.glossEnabled;
+  // 保存値だけでなく実際の権限保有も突き合わせる（chrome://extensions から後で剥奪されている場合に
+  // チェックが入ったまま表示されてしまう「嘘」を防ぐ。background.js:688/:707 と同じパターン）
+  const glossHasPermission = await chrome.permissions.contains({ origins: [WIKIPEDIA_ORIGIN] }).catch(() => false);
+  $('glossEnabled').checked = settings.glossEnabled && glossHasPermission;
   $('glossEngine').value = settings.glossEngine;
 
   updateProviderUI(settings.apiProvider);
