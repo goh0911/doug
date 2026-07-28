@@ -2647,6 +2647,10 @@ JSON配列のみ返してください:
     if (!overlayContainer) return;
     overlaysVisible = !overlaysVisible;
     overlayContainer.style.display = overlaysVisible ? '' : 'none';
+    // オーバーレイを非表示にしても span は DOM に残ったままなので mouseout が
+    // 起きずポップアップだけ残る（Finding 4 と同種）。currentGlossDefs/currentGlossTerms は
+    // 再表示時に下線を復活させる必要があるためリセットしない（再レビュー Minor）
+    if (!overlaysVisible) hideGlossPopup();
   }
 
   function clearOverlays() {

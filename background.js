@@ -703,6 +703,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         .then((ok) => ({ granted: ok }))
         .catch(() => ({ granted: false }));
       if (!granted) { sendResponse({ started: false }); return; }
+      // Nano が使えない環境では先読みが Wikipedia を取得しても生成できず（有料APIへは
+      // フォールバックしない）、次回の先読みで同じ記事を取り直すだけの無限ループになる
+      // （再レビュー Important）。生成できる見込みが無いなら Wikipedia を取りに行かない
+      if (!(await isNanoAvailableBg())) { sendResponse({ started: false }); return; }
 
       // 設計書 §4.1「API フォールバック時は先読みしない」: 先読み経路は Nano のみで生成し、
       // 有料 API へは絶対にフォールバックしない（最終レビュー Critical 1）
