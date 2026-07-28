@@ -741,6 +741,19 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       return;
     }
 
+    // 用語抽出を background 側で実行する（series.js の「実行する」ボタンから使う）。
+    // series.js に同じ処理のコピーを持たせると、スキーマ強制・ペア数制限・診断ログの
+    // 修正が片方にしか効かなくなるため、実処理は runExtractionBg に一本化する
+    if (message.type === 'RUN_EXTRACTION') {
+      try {
+        await runExtractionBg(message.payload && message.payload.seriesId);
+        sendResponse({ status: 'ok' });
+      } catch (err) {
+        sendResponse({ status: 'error', message: err && err.message });
+      }
+      return;
+    }
+
     if (message.type === 'ACQUIRE_EXTRACTION_LOCK') {
       try {
         const { seriesId } = message.payload;
