@@ -196,46 +196,16 @@ const EXTRACTION_NANO_TIMEOUT_MS = 60_000;
 // 1 回の抽出で Nano に渡すペア数の上限（実機実測で 10〜20 が最適域・下の詳細コメント参照）
 const EXTRACTION_PAIRS_PER_RUN = 20;
 
-// Nano はプロンプトで「json だけ出せ」と指示しても散文で返すことがある（実機で確認）。
-// responseConstraint（JSON スキーマ）を渡すと出力形式を強制できる。
-const EXTRACTION_SCHEMA = {
-  type: 'array',
-  items: {
-    type: 'object',
-    properties: {
-      original: { type: 'string' },
-      translated: { type: 'string' },
-      variants: { type: 'array', items: { type: 'string' } },
-      inconsistent: { type: 'boolean' },
-    },
-    required: ['original', 'translated'],
-  },
-};
-
-const GLOSS_SCHEMA = {
-  type: 'object',
-  properties: {
-    identity: { type: 'string' },
-    powers: { type: 'string' },
-  },
-  required: ['identity', 'powers'],
-};
-
-/**
- * responseConstraint 付きで prompt する。未対応の Chrome では制約無しで再試行する。
- * @returns {Promise<string>} 応答テキスト
- */
-async function promptWithSchema(session, prompt, schema, signal) {
-  try {
-    return await session.prompt(prompt, { responseConstraint: schema, signal });
-  } catch (err) {
-    // abort は再試行しない（呼び出し側のタイムアウト）
-    if (err && (err.name === 'AbortError' || (signal && signal.aborted))) throw err;
-    // responseConstraint 未対応（NotSupportedError / TypeError）なら制約無しで再試行。
-    // パーサ側が散文を弾いて [] になるだけで、壊れた候補が入ることはない
-    return session.prompt(prompt, { signal });
-  }
-}
+// responseConstraint（JSON スキーマ）は使わない。
+// 一度導入したが実機比較で不利と判明したため撤回した（本番プロンプト・同一ペアでの実測）:
+//   制約あり 18,070ms → RED HULK / GAMMA TERRORIST / TONY STARK / AVENGE / DOC GREEN
+//   制約なし  2,076ms → RED HULK / GAMMA TERRORIST / TONY STARK / DOC GREEN
+// 制約付きデコードは約9倍遅いうえ、動詞 AVENGE を混入させて質もむしろ落ちた。
+// 本番プロンプトは元から ```json で囲んだ配列を返しており、parseCandidatesJson /
+// parseGlossResponse がフェンス付き・素の JSON・前置きありのいずれも処理できる。
+//
+// 「Nano は JSON を返さない」という当初の診断は、本番プロンプトではなく
+// 簡略化した検証用プロンプトで測ったことによる誤りだった。
 
 async function runExtractionBg(seriesId) {
   if (!seriesId || extractionInFlight.has(seriesId)) return;
@@ -287,9 +257,7 @@ async function runExtractionBg(seriesId) {
         expectedInputs: [{ type: 'text', languages: ['en', 'ja'] }],
         expectedOutputs: [{ type: 'text', languages: ['ja', 'en'] }],
       });
-      const responseText = await promptWithSchema(
-        session, prompt, EXTRACTION_SCHEMA, controller.signal
-      );
+      const responseText = await session.prompt(prompt, { signal: controller.signal });
       candidates = parseCandidatesJson(responseText);
       success = true;
     } catch (err) {
@@ -403,8 +371,7 @@ async function generateWithNano(prompt) {
       expectedInputs: [{ type: 'text', languages: ['en', 'ja'] }],
       expectedOutputs: [{ type: 'text', languages: ['ja', 'en'] }],
     });
-    // 用語抽出と同じく、Nano は指示だけでは JSON を返さないことがあるためスキーマで強制する
-    text = await promptWithSchema(session, prompt, GLOSS_SCHEMA, controller.signal);
+    text = await session.prompt(prompt, { signal: controller.signal });
   } catch (err) {
     console.warn('[gloss] 解説生成に失敗:', err && err.name, err && err.message);
     return null;
