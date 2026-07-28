@@ -26,6 +26,7 @@ import {
   extractIntro, extractPowers, passesGate, buildPageUrl,
 } from './utils/wiki-source.js';
 import { buildGlossPrompt, parseGlossResponse } from './utils/gloss-summary.js';
+import { sanitizePairForNano, parseCandidatesJson, buildExtractionPrompt } from './utils/nano-extract.js';
 import { isUsable } from './utils/gloss-cache.js';
 
 // ============================================================
@@ -175,6 +176,78 @@ async function detectSeriesWithNano({ title, url, h1, ogTitle } = {}) {
     source: 'nano',
     confidence: 0.5,
   };
+}
+
+// ============================================================
+// Phase 7: 用語候補の自動抽出
+// ============================================================
+// 従来 extractionDue を消費するのは series.js だけで、シリーズ管理画面を開いて
+// バナーの「実行する」を押したときにしか抽出が走らなかった（series.js:503）。
+// そのため翻訳を重ねても用語集が空のままになり、解説ポップアップも機能しなかった。
+// ここでは翻訳記録の直後に同じ処理を裏で走らせる。ロジックは series.js の
+// runExtraction と同型だが、メッセージ往復を挟まず store を直接呼ぶ。
+
+// 同一シリーズの抽出を二重起動しないための in-flight ロック
+// （series-store 側の extractionRunning ロックとは別に、SW 内での多重起動を防ぐ）
+const extractionInFlight = new Set();
+
+async function runExtractionBg(seriesId) {
+  if (!seriesId || extractionInFlight.has(seriesId)) return;
+  if (!(await isNanoAvailableBg())) return;
+
+  extractionInFlight.add(seriesId);
+  try {
+    const lockResult = await acquireExtractionLock(seriesId);
+    if (!lockResult || lockResult.status !== 'ok') return; // locked / not-found
+
+    const series = lockResult.series;
+    if (!series || !Array.isArray(series.recentPairs) || series.recentPairs.length === 0) {
+      // ペアが無ければロックだけ解放する（success:true, candidates:[]）
+      await applyExtractionResult({ seriesId, candidates: [], success: true });
+      return;
+    }
+
+    const sanitizedPairs = series.recentPairs.map(sanitizePairForNano).filter(Boolean);
+    // series.js の runExtraction と同じく 'ja' 固定（両者の挙動を揃えるため）
+    const targetLang = 'ja';
+    const glossaryLangMap = (series.glossary && series.glossary[targetLang]) || {};
+    const prompt = buildExtractionPrompt(
+      sanitizedPairs,
+      Object.keys(glossaryLangMap),
+      series.rejectedOriginals || []
+    );
+
+    let candidates = [];
+    let success = false;
+    let session = null;
+    const controller = new AbortController();
+    // 初回推論はモデルのウォームアップで十数秒かかる（実測 ≈18s）ため 30 秒
+    const timeoutId = setTimeout(() => controller.abort(), 30000);
+    try {
+      // topK と temperature は両方指定が必須（片方だけは NotSupportedError）
+      session = await self.LanguageModel.create({
+        temperature: 0,
+        topK: 1,
+        expectedInputs: [{ type: 'text', languages: ['en', 'ja'] }],
+        expectedOutputs: [{ type: 'text', languages: ['ja', 'en'] }],
+      });
+      const responseText = await session.prompt(prompt, { signal: controller.signal });
+      candidates = parseCandidatesJson(responseText);
+      success = true;
+    } catch {
+      success = false;
+    } finally {
+      clearTimeout(timeoutId);
+      if (session) { try { session.destroy(); } catch { /* destroy 失敗は無視 */ } }
+    }
+
+    // success:false でも呼ぶ（extractionRunning の解放と失敗回数の記録を store 側が行う）
+    await applyExtractionResult({ seriesId, candidates, success });
+  } catch {
+    /* 抽出の失敗は翻訳結果に影響させない */
+  } finally {
+    extractionInFlight.delete(seriesId);
+  }
 }
 
 // ============================================================
@@ -508,6 +581,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         // pairs（Phase 4）が含まれる場合はそのまま転送（pairs が無ければ [] として渡す）
         const result = await recordSeriesTranslation({ ...payload, pathPrefix, pairs: payload.pairs ?? [] });
         sendResponse(result);
+        // 抽出が予約されていれば裏で走らせる（応答は待たせない）。
+        // これが無いとシリーズ管理画面を開くまで用語集が永久に空のままになる
+        if (result && result.extractionDue) {
+          runExtractionBg(payload.seriesId).catch(() => { /* 失敗は表示しない */ });
+        }
       } catch (err) {
         sendResponse(null);
       }
