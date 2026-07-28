@@ -573,6 +573,12 @@ JSON配列のみ返してください:
     // OFF 中は Wikipedia fetch や生成 API 呼び出しを一切発生させない（既定 false）
     const { glossEnabled = false } = await chrome.storage.local.get('glossEnabled');
     if (!glossEnabled) return;
+    // 設計書 §4.1: 先読みの発火条件は「生成エンジンが Nano」。api 固定（品質優先）では
+    // 先読みしても使われない Wikipedia fetch が発生するだけなのでここで止める。
+    // 'auto' は Nano が実際に使えるか background 側でしか分からないため通す
+    // （課金防止そのものは background.js の nanoOnly ゲートが担保する）
+    const { glossEngine = 'auto' } = await chrome.storage.local.get('glossEngine');
+    if (glossEngine === 'api') return;
     const langMap = (series.glossary && series.glossary[targetLang]) || {};
     const terms = Object.keys(langMap).filter((k) => langMap[k] && langMap[k].approved === true);
     if (terms.length === 0) return;

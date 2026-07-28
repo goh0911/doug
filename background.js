@@ -289,8 +289,13 @@ async function fetchFromSources(term, seriesName) {
 /**
  * 1 語ぶんの解説を作る。成功時はエントリ、失敗時は失敗エントリを返す。
  * R-SEC-1a: 翻訳とは独立した LLM 呼び出しにする（buildSeriesPromptSection に合流させない）
+ *
+ * @param {boolean} nanoOnly true のとき Nano のみを試し、有料 API へは絶対にフォールバックしない。
+ *   設計書 §4.1「API フォールバック時は先読みしない」を満たすための先読み専用ゲート（最終レビュー Critical 1）。
+ *   Nano が使えず生成できなかった場合は null を返す（=「失敗」としてキャッシュしない。
+ *   hover 時に nanoOnly=false で再試行できるようにするため。cf. isUsable の 24h 失敗キャッシュ）
  */
-async function buildGlossEntry(term, seriesName, langLabel) {
+async function buildGlossEntry(term, seriesName, langLabel, nanoOnly = false) {
   const now = Date.now();
   const material = await fetchFromSources(term, seriesName);
   if (!material) return { failed: true, at: now };
@@ -304,7 +309,10 @@ async function buildGlossEntry(term, seriesName, langLabel) {
 
   const { glossEngine = 'auto' } = await chrome.storage.local.get('glossEngine');
   let parsed = glossEngine === 'api' ? null : await generateWithNano(prompt);
-  if (!parsed) parsed = await generateGlossWithApi(prompt);
+  if (!parsed) {
+    if (nanoOnly) return null; // 先読みでは有料 API を呼ばない。失敗としてキャッシュもしない
+    parsed = await generateGlossWithApi(prompt);
+  }
   if (!parsed) return { failed: true, at: now };
 
   // R-W18: 記事本文・抽出テキストは保存しない
@@ -333,9 +341,10 @@ async function mapWithConcurrency(items, limit, worker) {
 
 /**
  * 未生成の語だけ生成してキャッシュに書き戻し、表示可能な解説を返す。
+ * @param {boolean} nanoOnly true のとき先読み専用モード（Nano のみ・有料 API 不可）で生成する
  * @returns {Promise<object>} { 原語: { identity, powers, url } }。失敗語は含めない
  */
-async function resolveGlossDefs({ seriesId, seriesName, terms, targetLang, langLabel }) {
+async function resolveGlossDefs({ seriesId, seriesName, terms, targetLang, langLabel, nanoOnly = false }) {
   const lockKey = `${seriesId}:${targetLang}`;
   // 直前の実行が入れ替わる直前まで Map から見えるようにチェーンする。
   // await の後に別呼び出しが割り込んでも、同じ prev を待った全員が
@@ -367,18 +376,23 @@ async function resolveGlossDefs({ seriesId, seriesName, terms, targetLang, langL
         } else {
           // 1 語の失敗（chrome.storage の reject 等）でバッチ全体を巻き添えにしない。
           // 失敗語は failed エントリとして扱い、他の語の結果とキャッシュ書き込みを守る（レビュー Important 3）
-          const built = await mapWithConcurrency(missing, GLOSS_CONCURRENCY, (term) =>
-            buildGlossEntry(term, seriesName, langLabel).catch(() => ({ failed: true, at: now }))
-          );
-          const next = { ...cached };
-          missing.forEach((term, i) => { next[term] = built[i]; });
-          const stored = await putGlossDefs(seriesId, targetLang, next);
-          if (stored) {
-            Object.assign(cached, next);
-          } else {
-            // 直前の存在確認から書き込みまでの間に series が削除された等のレース。戻り値を捨てず記録する
-            console.debug('[gloss] putGlossDefs failed after existence check (race?):', seriesId, targetLang);
-          }
+          //
+          // 語 1 件が完成するたびに即座に putGlossDefs で永続化する。バッチ完了を待って
+          // 1 回だけ書き込むと、Service Worker が途中で停止したとき完了済み分まで全て失われる
+          // （最終レビュー Important 3）。nanoOnly（先読み）で Nano が使えず生成できなかった語は
+          // buildGlossEntry が null を返す。これは「失敗」ではなく「今回は試さなかった」なので
+          // キャッシュに書かず missing のまま残し、hover 時の nanoOnly=false な再試行に委ねる
+          await mapWithConcurrency(missing, GLOSS_CONCURRENCY, async (term) => {
+            const entry = await buildGlossEntry(term, seriesName, langLabel, nanoOnly)
+              .catch(() => ({ failed: true, at: now }));
+            if (entry === null) return;
+            cached[term] = entry;
+            const stored = await putGlossDefs(seriesId, targetLang, cached);
+            if (!stored) {
+              // 直前の存在確認から書き込みまでの間に series が削除された等のレース。戻り値を捨てず記録する
+              console.debug('[gloss] putGlossDefs failed after existence check (race?):', seriesId, targetLang);
+            }
+          });
         }
       }
 
@@ -690,12 +704,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         .catch(() => ({ granted: false }));
       if (!granted) { sendResponse({ started: false }); return; }
 
+      // 設計書 §4.1「API フォールバック時は先読みしない」: 先読み経路は Nano のみで生成し、
+      // 有料 API へは絶対にフォールバックしない（最終レビュー Critical 1）
       resolveGlossDefs({
         seriesId: message.seriesId,
         seriesName: message.seriesName,
         terms: message.terms,
         targetLang: message.targetLang,
         langLabel: message.langLabel,
+        nanoOnly: true,
       }).catch(() => { /* 失敗は表示しない（設計書 §10） */ });
       sendResponse({ started: true });
       return;
@@ -707,12 +724,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       const granted = await chrome.permissions.contains({ origins: [WIKIPEDIA_ORIGIN] }).catch(() => false);
       if (!granted) { sendResponse({ defs: {} }); return; }
       try {
+        // hover・翻訳完了時の経路は従来どおり API フォールバックを許可する（設計書 §4.1）
         const defs = await resolveGlossDefs({
           seriesId: message.seriesId,
           seriesName: message.seriesName,
           terms: message.terms,
           targetLang: message.targetLang,
           langLabel: message.langLabel,
+          nanoOnly: false,
         });
         sendResponse({ defs });
       } catch {
