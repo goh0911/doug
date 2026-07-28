@@ -479,3 +479,28 @@ describe('buildExtractionPrompt - variants (Phase 6-B)', () => {
     expect(p).toContain('inconsistent');
   });
 });
+
+describe('sanitizeCandidate - 文の形をした候補の除外（実機で Nano が台詞を丸写しした事例）', () => {
+  it('省略記号で始まる台詞を弾く', () => {
+    expect(sanitizeCandidate({ original: '... FORTEAN TO SHADOW BASE.', translated: 'こちらフォルティアン' })).toBeNull();
+  });
+
+  it('文末記号で終わる複数語の台詞を弾く', () => {
+    expect(sanitizeCandidate({ original: 'NO HUMAN CASUALTIES.', translated: '人間の被害はなし' })).toBeNull();
+    expect(sanitizeCandidate({ original: 'YOU HAVE COMMAND!', translated: '指揮を執れ' })).toBeNull();
+    expect(sanitizeCandidate({ original: 'WHERE IS HE?', translated: '奴はどこだ' })).toBeNull();
+  });
+
+  // 頭字語は空白を含まないため残さなければならない
+  it('末尾ピリオドでも空白の無い頭字語は通す', () => {
+    expect(sanitizeCandidate({ original: 'S.H.I.E.L.D.', translated: 'シールド' }))
+      .toEqual({ original: 'S.H.I.E.L.D.', translated: 'シールド' });
+  });
+
+  it('通常の固有名詞は通す', () => {
+    for (const [o, t] of [['Thunderbolt Ross', 'サンダーボルト・ロス'], ['Doc Green', 'ドック・グリーン'],
+                          ['Gamma Base', 'ガンマ基地'], ['Red Hulk', 'レッドハルク']]) {
+      expect(sanitizeCandidate({ original: o, translated: t })).toEqual({ original: o, translated: t });
+    }
+  });
+});

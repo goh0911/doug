@@ -56,6 +56,16 @@ export function sanitizeCandidate(candidate) {
     return null;
   }
 
+  // 文の形をした候補を弾く（実機で Nano が台詞を丸写しした:
+  //   "... FORTEAN TO SHADOW BASE." (28字) / "NO HUMAN CASUALTIES." (21字)
+  // どちらも30字以内・文字種も適合のため既存の検査を通過していた）
+  //
+  // 1) 先頭が英数字でない（"... FORTEAN" のような省略記号始まり）
+  if (!/^[A-Za-z0-9]/.test(orig)) return null;
+  // 2) 末尾が文末記号で、かつ空白を含む（複数語の文）。
+  //    ただし "S.H.I.E.L.D." のような頭字語は空白を含まないので残る
+  if (/[.!?]$/.test(orig) && orig.includes(' ')) return null;
+
   // translated のサニタイズ（制御文字・方向制御・タグ文字除去＋区切り記号エスケープ）
   // ※ escapeDelimiters 追加（2026-07-25 監査 F-1: 入力側 sanitizePairForNano と対称化）
   const cleanTrans = escapeDelimiters(cleanControlChars(trans));
