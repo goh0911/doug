@@ -184,7 +184,15 @@ async function fetchWithRetry(url, options, providerName) {
     const baseWait = res.status === 503 ? 3000 : 10000;
     const retryAfterSec = Math.min(parseInt(retryAfter, 10) || 0, 60); // 上限60秒
     const wait = retryAfterSec > 0 ? retryAfterSec * 1000 : (attempt + 1) * baseWait;
-    await new Promise(r => setTimeout(r, wait));
+    // 中断シグナルが渡されている場合はバックオフ待機も打ち切る（signalなしの場合は従来と同一動作）
+    await new Promise((resolve) => {
+      const timer = setTimeout(resolve, wait);
+      const signal = options && options.signal;
+      if (!signal) return;
+      if (signal.aborted) { clearTimeout(timer); resolve(); return; }
+      signal.addEventListener('abort', () => { clearTimeout(timer); resolve(); }, { once: true });
+    });
+    if (options && options.signal && options.signal.aborted) break;
   }
   // 3回リトライしても失敗の場合、明示的なメッセージで通知
   if (res.status === 429) {
