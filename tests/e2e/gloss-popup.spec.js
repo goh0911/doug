@@ -31,6 +31,7 @@ test.describe('固有名詞解説ポップアップ', () => {
     await expect(translateBtn).toBeVisible({ timeout: 10_000 });
     await translateBtn.click();
     await expect(page.locator('#mut-overlay-container')).toBeAttached({ timeout: 30_000 });
+    await expect(page.locator('.mut-overlay').first()).toBeVisible({ timeout: 30_000 });
 
     // glossEnabled の既定は false（Task 9）。span も popup も現れない
     await expect(page.locator('.doug-gloss-term')).toHaveCount(0);
