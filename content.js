@@ -467,7 +467,7 @@ JSON配列のみ返してください:
     const modeBtn = document.createElement('button');
     modeBtn.id = 'mut-btn-mode';
     modeBtn.className = 'mut-btn';
-    modeBtn.title = '再翻訳モード（解説を出さずパネル再翻訳ボタンを使う）';
+    modeBtn.title = '再翻訳モード（解説を出さず再翻訳ボタンを使う）';
     modeBtn.style.display = 'none';
     modeBtn.setAttribute('aria-pressed', 'false');
     modeBtn.insertAdjacentHTML('afterbegin',
