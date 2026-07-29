@@ -1759,6 +1759,10 @@ JSON配列のみ返してください:
   // ============================================================
   // 直前に張った再翻訳ボタン群を外すための関数（addPanelRetranslateButtons が設定）
   let panelBtnCleanup = null;
+  // 表示中のボタンを引っ込めて選択状態を捨てる関数。解説ポップアップの出入りで呼ぶ。
+  // panelMoveHandler は mousemove でしか再評価しないため、これが無いと
+  // 「下線に乗せた時点でボタンが出る → 150ms 後にポップアップが出ても消えない」
+  let panelBtnReset = null;
 
   function addPanelRetranslateButtons(pgResult) {
     // 前回ぶんを必ず捨てる。同じ overlayContainer に対して 2 回呼ばれると
@@ -1858,11 +1862,19 @@ JSON配列のみ返してください:
       document.removeEventListener('mousemove', panelMoveHandler);
       for (const { btn } of btns) btn.remove();
     };
+
+    // currentGroupId も捨てる。残すと、ポップアップを閉じたあと同じパネル上で
+    // マウスを動かしても newGid === currentGroupId となりボタンが復帰しない
+    panelBtnReset = () => {
+      currentGroupId = null;
+      for (const { btn } of btns) btn.classList.remove('mut-panel-btn-visible');
+    };
   }
 
   // 直前に張った再翻訳ボタンとそのハンドラを外す（未設定なら何もしない）
   function clearPanelRetranslateButtons() {
     if (panelBtnCleanup) { panelBtnCleanup(); panelBtnCleanup = null; }
+    panelBtnReset = null;
   }
 
   // ============================================================
@@ -2023,7 +2035,12 @@ JSON配列のみ返してください:
   function hideGlossPopup() {
     if (glossHoverTimer) { clearTimeout(glossHoverTimer); glossHoverTimer = null; }
     if (glossPopupSpanEl) { glossPopupSpanEl.removeAttribute('aria-describedby'); glossPopupSpanEl = null; }
-    if (glossPopupEl) { glossPopupEl.remove(); glossPopupEl = null; }
+    if (glossPopupEl) {
+      glossPopupEl.remove();
+      glossPopupEl = null;
+      // 選択状態を捨てて、次の mousemove でボタンが復帰できるようにする
+      if (panelBtnReset) panelBtnReset();
+    }
   }
 
   function showGlossPopup(spanEl) {
@@ -2101,6 +2118,10 @@ JSON配列のみ返してください:
     // 関連付ける（設計書 §7.2。最終レビュー Minor 5）
     spanEl.setAttribute('aria-describedby', GLOSS_POPUP_ID);
     glossPopupSpanEl = spanEl;
+
+    // 解説が出ている間は再翻訳ボタンを引っ込める。mousemove を待つと、
+    // 下線に乗せた時点で出たボタンがそのまま重なって残る
+    if (panelBtnReset) panelBtnReset();
   }
 
   document.addEventListener('mouseover', (e) => {
