@@ -2763,8 +2763,11 @@ JSON配列のみ返してください:
   // UI配置
   // ============================================================
   function getUIParent() {
-    // showModal()で開いたdialogはtop-layerを使うため、body配置のUIが隠れる
-    return document.querySelector('dialog[open]') || document.body;
+    // showModal()で開いたdialogはtop-layerを使うため、body配置のUIが隠れる。
+    // 条件は :modal に限る。dialog[open] だと、リーダーが開いたまま
+    // visibility:hidden で伏せている非モーダル dialog まで拾ってしまい、
+    // その配下に置いた UI が visibility を継承して不可視になる（実機で発生）
+    return document.querySelector('dialog:modal') || document.body;
   }
 
   // ============================================================
