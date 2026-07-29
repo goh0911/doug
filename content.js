@@ -31,7 +31,6 @@
   /* eslint-disable-next-line no-unused-vars */
   const PANEL_CROP_PADDING     = 0.07; // crop時のパディング率（フェーズ4で使用）
   const BUBBLE_CROP_PADDING    = 0.15; // 吹き出し単体crop時のパディング率（個別再翻訳）
-  const PANEL_HOVER_EXPAND     = 15;   // パネルホバー検出を bbox から ±N% 拡張（吹き出し bbox が小さい場合の補正）
   const SEED_SAMPLE_SIZE       = 5;    // 起点サンプル固定サイズ（5×5）
   const STABLE_CHECK_INTERVAL  = 100;  // 安定判定チェック間隔（ピクセル数、大パネルの早期終了防止で50→100）
 
@@ -944,12 +943,10 @@ JSON配列のみ返してください:
       const onAdjusted = imageUrl ? (idx, style) => saveAdjustment(imageUrl, idx, style) : null;
       renderOverlays(getOverlayTarget(comicInfo), response.translations, adjustments, onAdjusted, capturedRect);
       showExtraButtons();
-      // フェーズ3: パネル再翻訳ボタンを非同期で追加（翻訳表示をブロックしない）
+      // パネルのグルーピングは bbox デバッグ表示（showPanelDebug）で使うため残す。
+      // パネル単位の再翻訳ボタンは廃止し、再翻訳は吹き出し単位に一本化した
       computePanelGroups(imageData, response.translations).then(pg => {
         _lastPanelGroups = pg;
-        console.log('[doug] computePanelGroups result:', pg ? `${pg.groups.length} groups` : 'null');
-        if (overlayContainer) addPanelRetranslateButtons(pg);
-        else console.log('[doug] overlayContainer is null, skipping addPanelRetranslateButtons');
       }).catch((err) => { console.log('[doug] computePanelGroups error:', err); });
 
       // v2 Phase 2A: 翻訳成功時にシリーズを記録（seriesInfo が検出済みの場合のみ）
@@ -1762,114 +1759,6 @@ JSON配列のみ返してください:
     }
   }
 
-  // ============================================================
-  // フェーズ3: パネル再翻訳ボタンを overlayContainer に追加
-  // mousemove で各パネル bbox 内にカーソルがあるか判定して表示/非表示を切り替える
-  // ============================================================
-  // 直前に張った再翻訳ボタン群を外すための関数（addPanelRetranslateButtons が設定）
-  let panelBtnCleanup = null;
-
-  function addPanelRetranslateButtons(pgResult) {
-    // 前回ぶんを必ず捨てる。同じ overlayContainer に対して 2 回呼ばれると
-    // ボタンと mousemove ハンドラが二重に並存し、それぞれが 1 個ずつ表示するため
-    // 再翻訳ボタンが 2 個出る（実機で発生）
-    clearPanelRetranslateButtons();
-
-    if (!overlayContainer || !pgResult || pgResult.groups.length === 0) {
-      console.log('[doug] addPanelRetranslateButtons early return:', { hasContainer: !!overlayContainer, hasPgResult: !!pgResult, groupsLen: pgResult?.groups?.length });
-      return;
-    }
-    console.log('[doug] addPanelRetranslateButtons: adding buttons for', pgResult.groups.length, 'groups');
-
-    const btns = [];
-
-    for (const group of pgResult.groups) {
-      const { left, top, width, height } = group.unionBboxPct;
-      // ホバー検出用（PANEL_HOVER_EXPAND分拡張、0〜100にクランプ）
-      const hLeft   = Math.max(0,   left - PANEL_HOVER_EXPAND);
-      const hTop    = Math.max(0,   top  - PANEL_HOVER_EXPAND);
-      const hRight  = Math.min(100, left + width  + PANEL_HOVER_EXPAND);
-      const hBottom = Math.min(100, top  + height + PANEL_HOVER_EXPAND);
-
-      // ボタン（位置は mousemove で動的に設定）
-      const btn = document.createElement('button');
-      btn.className = 'mut-panel-retranslate-btn';
-      btn.title = 'このパネルを再翻訳';
-      btn.dataset.groupId = String(group.groupId);
-      // 初期位置はオフスクリーン（mousemove 前に見えないようにするため）
-      btn.style.left = '-100px';
-      btn.style.top  = '-100px';
-      btn.insertAdjacentHTML('afterbegin',
-        '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">' +
-        '<path d="M23 4v6h-6"/>' +
-        '<path d="M1 20v-6h6"/>' +
-        '<path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>' +
-        '</svg>');
-
-      btn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        retranslatePanel(group, pgResult.W, pgResult.H);
-      });
-
-      overlayContainer.appendChild(btn);
-      // bbox 中心座標（距離比較用）
-      const cx = left + width  / 2;
-      const cy = top  + height / 2;
-      btns.push({ btn, hbox: { left: hLeft, top: hTop, right: hRight, bottom: hBottom }, cx, cy });
-    }
-
-    // マウス位置でボタン表示/非表示
-    // カーソルがパネル hbox に入った瞬間の座標にボタンを固定（sticky position）
-    let currentGroupId = null;
-    const panelMoveHandler = (e) => {
-      if (!overlayContainer) return;
-      const cr = overlayContainer.getBoundingClientRect();
-      if (cr.width === 0 || cr.height === 0) return;
-      const relX = (e.clientX - cr.left) / cr.width  * 100;
-      const relY = (e.clientY - cr.top)  / cr.height * 100;
-
-      // hbox 内にあるパネルのうち bbox 中心が最も近い1つを選択
-      let bestEntry = null;
-      let bestDist  = Infinity;
-      for (const entry of btns) {
-        const { hbox, cx, cy } = entry;
-        if (relX >= hbox.left && relX <= hbox.right &&
-            relY >= hbox.top  && relY <= hbox.bottom) {
-          const d = (relX - cx) ** 2 + (relY - cy) ** 2;
-          if (d < bestDist) { bestDist = d; bestEntry = entry; }
-        }
-      }
-
-      // 通常モードでのボタン抑制は content.css 側（.mut-retranslate-mode の
-      // 有無で display を切る）に一本化した。ここでは従来どおり選択だけを行う
-      const newGid = bestEntry ? bestEntry.btn.dataset.groupId : null;
-      if (newGid !== currentGroupId) {
-        currentGroupId = newGid;
-        for (const { btn } of btns) btn.classList.remove('mut-panel-btn-visible');
-        if (bestEntry) {
-          // 吹き出しクラスターの中心に固定配置（カーソル位置に依存しない）
-          bestEntry.btn.style.left      = bestEntry.cx + '%';
-          bestEntry.btn.style.top       = bestEntry.cy + '%';
-          bestEntry.btn.style.transform = 'translate(-50%, -50%)';
-          bestEntry.btn.classList.add('mut-panel-btn-visible');
-        }
-      }
-    };
-    document.addEventListener('mousemove', panelMoveHandler, { passive: true });
-
-    // 次回の addPanelRetranslateButtons / clearOverlays で確実に外せるようにする。
-    // overlayContainer._cleanup への合成だけだと、renderOverlays が _cleanup を
-    // 上書き代入したときにハンドラが外れず残る
-    panelBtnCleanup = () => {
-      document.removeEventListener('mousemove', panelMoveHandler);
-      for (const { btn } of btns) btn.remove();
-    };
-  }
-
-  // 直前に張った再翻訳ボタンとそのハンドラを外す（未設定なら何もしない）
-  function clearPanelRetranslateButtons() {
-    if (panelBtnCleanup) { panelBtnCleanup(); panelBtnCleanup = null; }
-  }
 
   // ============================================================
   // フェーズ4: パネル crop / 座標変換 / マージ / 再翻訳
@@ -2222,64 +2111,6 @@ JSON配列のみ返してください:
   }
 
   // パネル再翻訳のオーケストレーター
-  // group: computePanelGroups の groups[] の1要素
-  // W, H: フル画像のピクセルサイズ（_lastPanelGroups.W / H）
-  async function retranslatePanel(group, W, H) {
-    if (isTranslating) return;
-    if (!_lastImageDataUrl || !_lastTranslations) {
-      showNotification('翻訳データがありません。先にページ全体を翻訳してください。', 'warn');
-      return;
-    }
-
-    isTranslating = true;
-    try {
-      // 1. crop（Promise を返すため await が必要）
-      const cropResult = await cropPanelImage(_lastImageDataUrl, group, W, H);
-      if (!cropResult) {
-        showNotification('パネルの切り抜きに失敗しました', 'error');
-        return;
-      }
-      const { dataUrl: cropDataUrl, cropBox } = cropResult;
-
-      // 2. 翻訳（既存パイプライン流用、キャッシュ無効）
-      const response = await translateImage(cropDataUrl, null, true);
-      if (!response || response.error) {
-        showNotification(response?.error || '翻訳応答がありません', 'error');
-        return;
-      }
-
-      // 3. 0件チェック
-      const rawItems = response.translations;
-      if (!rawItems || rawItems.length === 0) {
-        showNotification('このパネルにはテキストが見つかりませんでした', 'info');
-        return;
-      }
-
-      // 4. 座標変換（crop % → フルページ %）
-      const incoming = rawItems.map(item => ({
-        ...item,
-        bbox: item.bbox ? transformBboxToFullPage(item.bbox, cropBox, W, H) : item.bbox,
-      }));
-
-      // 5. マージ
-      const { translations: merged, changedIndices } = mergeTranslations(_lastTranslations, incoming);
-
-      // 6. 状態更新
-      _lastTranslations = merged;
-
-      // 7. オーバーレイ追加・更新
-      if (overlayContainer) {
-        addRetranslatedOverlays(overlayContainer, merged, changedIndices);
-      }
-
-      // 8. 通知
-      showNotification(`${changedIndices.size}件のテキストを追加しました`, 'success');
-    } catch (err) {
-      showNotification('翻訳に失敗: ' + err.message, 'error');
-    } finally {
-      isTranslating = false;
-    }
-  }
 
   // ============================================================
   // 吹き出し単体の再翻訳
@@ -2752,7 +2583,6 @@ JSON配列のみ返してください:
 
   function clearOverlays() {
     clearPanelDebug();
-    clearPanelRetranslateButtons();
     _lastPanelGroups = null;
     // glossPopupEl は overlayContainer の外（getUIParent() 直下）にあるため、
     // overlayContainer を消しても連動して消えない。カーソル下から要素が消えても
