@@ -537,9 +537,18 @@ JSON配列のみ返してください:
       btn.setAttribute('aria-pressed', retranslateMode ? 'true' : 'false');
       btn.title = retranslateMode
         ? '再翻訳モード: ON（解説は出ません）'
-        : '再翻訳モード（解説を出さずパネル再翻訳ボタンを使う）';
+        : '再翻訳モード（解説を出さず再翻訳ボタンを使う）';
     }
     if (retranslateMode) hideGlossPopup();
+    applyRetranslateMode();
+  }
+
+  // overlayContainer にモードを反映する。再翻訳ボタン 3 種の表示は
+  // content.css の #mut-overlay-container:not(.mut-retranslate-mode) 側で止める。
+  // renderOverlays がコンテナを作り直すたびに呼ぶ必要がある
+  function applyRetranslateMode() {
+    if (!overlayContainer) return;
+    overlayContainer.classList.toggle('mut-retranslate-mode', retranslateMode);
   }
 
   // v2 Phase 1: シリーズインジケーター更新
@@ -1759,10 +1768,6 @@ JSON配列のみ返してください:
   // ============================================================
   // 直前に張った再翻訳ボタン群を外すための関数（addPanelRetranslateButtons が設定）
   let panelBtnCleanup = null;
-  // 表示中のボタンを引っ込めて選択状態を捨てる関数。解説ポップアップの出入りで呼ぶ。
-  // panelMoveHandler は mousemove でしか再評価しないため、これが無いと
-  // 「下線に乗せた時点でボタンが出る → 150ms 後にポップアップが出ても消えない」
-  let panelBtnReset = null;
 
   function addPanelRetranslateButtons(pgResult) {
     // 前回ぶんを必ず捨てる。同じ overlayContainer に対して 2 回呼ばれると
@@ -1835,16 +1840,13 @@ JSON配列のみ返してください:
         }
       }
 
-      // 解説ポップアップが出ている間はボタンを出さない。同じ吹き出しの上で
-      // 解説と再翻訳ボタンが重なって読めなくなるため（再翻訳モードでは解説が
-      // 出ないので、この抑制は働かない）
-      const suppressed = glossPopupEl !== null;
-
-      const newGid = (bestEntry && !suppressed) ? bestEntry.btn.dataset.groupId : null;
+      // 通常モードでのボタン抑制は content.css 側（.mut-retranslate-mode の
+      // 有無で display を切る）に一本化した。ここでは従来どおり選択だけを行う
+      const newGid = bestEntry ? bestEntry.btn.dataset.groupId : null;
       if (newGid !== currentGroupId) {
         currentGroupId = newGid;
         for (const { btn } of btns) btn.classList.remove('mut-panel-btn-visible');
-        if (bestEntry && !suppressed) {
+        if (bestEntry) {
           // 吹き出しクラスターの中心に固定配置（カーソル位置に依存しない）
           bestEntry.btn.style.left      = bestEntry.cx + '%';
           bestEntry.btn.style.top       = bestEntry.cy + '%';
@@ -1862,19 +1864,11 @@ JSON配列のみ返してください:
       document.removeEventListener('mousemove', panelMoveHandler);
       for (const { btn } of btns) btn.remove();
     };
-
-    // currentGroupId も捨てる。残すと、ポップアップを閉じたあと同じパネル上で
-    // マウスを動かしても newGid === currentGroupId となりボタンが復帰しない
-    panelBtnReset = () => {
-      currentGroupId = null;
-      for (const { btn } of btns) btn.classList.remove('mut-panel-btn-visible');
-    };
   }
 
   // 直前に張った再翻訳ボタンとそのハンドラを外す（未設定なら何もしない）
   function clearPanelRetranslateButtons() {
     if (panelBtnCleanup) { panelBtnCleanup(); panelBtnCleanup = null; }
-    panelBtnReset = null;
   }
 
   // ============================================================
@@ -2035,12 +2029,7 @@ JSON配列のみ返してください:
   function hideGlossPopup() {
     if (glossHoverTimer) { clearTimeout(glossHoverTimer); glossHoverTimer = null; }
     if (glossPopupSpanEl) { glossPopupSpanEl.removeAttribute('aria-describedby'); glossPopupSpanEl = null; }
-    if (glossPopupEl) {
-      glossPopupEl.remove();
-      glossPopupEl = null;
-      // 選択状態を捨てて、次の mousemove でボタンが復帰できるようにする
-      if (panelBtnReset) panelBtnReset();
-    }
+    if (glossPopupEl) { glossPopupEl.remove(); glossPopupEl = null; }
   }
 
   function showGlossPopup(spanEl) {
@@ -2118,10 +2107,6 @@ JSON配列のみ返してください:
     // 関連付ける（設計書 §7.2。最終レビュー Minor 5）
     spanEl.setAttribute('aria-describedby', GLOSS_POPUP_ID);
     glossPopupSpanEl = spanEl;
-
-    // 解説が出ている間は再翻訳ボタンを引っ込める。mousemove を待つと、
-    // 下線に乗せた時点で出たボタンがそのまま重なって残る
-    if (panelBtnReset) panelBtnReset();
   }
 
   document.addEventListener('mouseover', (e) => {
@@ -2439,6 +2424,8 @@ JSON配列のみ返してください:
 
     overlayContainer = document.createElement('div');
     overlayContainer.id = 'mut-overlay-container';
+    // 翻訳のたびにコンテナを作り直すため、現在のモードをここで載せ直す
+    applyRetranslateMode();
     Object.assign(overlayContainer.style, {
       position: 'fixed',
       top: containerTop + 'px',
