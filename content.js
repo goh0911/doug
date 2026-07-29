@@ -7,6 +7,24 @@
   if (window.__dougInitialized) return;
   window.__dougInitialized = true;
 
+  // SITE_DISABLED でこの IIFE インスタンスを畳むための解体処理。
+  // __dougInitialized を false に戻すだけだと、再有効化のたびに新しいインスタンスが
+  // 注入され、document レベルのリスナーが積み上がる（リリース前レビュー Important）
+  const teardownFns = [];
+  function onTeardown(fn) { teardownFns.push(fn); }
+  function runTeardown() {
+    while (teardownFns.length > 0) {
+      const fn = teardownFns.pop();
+      try { fn(); } catch { /* 解体の失敗で残りを止めない */ }
+    }
+  }
+
+  /** document へのリスナー登録と解体登録をまとめる */
+  function addDocumentListener(type, handler, options) {
+    document.addEventListener(type, handler, options);
+    onTeardown(() => document.removeEventListener(type, handler, options));
+  }
+
   let isTranslating = false;
   let overlayContainer = null;
   let toolbar = null;
@@ -1963,7 +1981,7 @@ JSON配列のみ返してください:
     glossPopupSpanEl = spanEl;
   }
 
-  document.addEventListener('mouseover', (e) => {
+  addDocumentListener('mouseover', (e) => {
     try {
       const span = e.target.closest && e.target.closest('.doug-gloss-term');
       if (!span) return;
@@ -1973,25 +1991,25 @@ JSON配列のみ返してください:
     } catch { /* 表示に失敗しても翻訳表示には影響させない */ }
   });
 
-  document.addEventListener('mouseout', (e) => {
+  addDocumentListener('mouseout', (e) => {
     try {
       const span = e.target.closest && e.target.closest('.doug-gloss-term');
       if (span) hideGlossPopup();
     } catch { /* 表示に失敗しても翻訳表示には影響させない */ }
   });
 
-  document.addEventListener('focusin', (e) => {
+  addDocumentListener('focusin', (e) => {
     try {
       const span = e.target.closest && e.target.closest('.doug-gloss-term');
       if (span) showGlossPopup(span);
     } catch { /* 表示に失敗しても翻訳表示には影響させない */ }
   });
 
-  document.addEventListener('focusout', () => {
+  addDocumentListener('focusout', () => {
     try { hideGlossPopup(); } catch { /* noop */ }
   });
 
-  document.addEventListener('keydown', (e) => {
+  addDocumentListener('keydown', (e) => {
     try {
       if (e.key === 'Escape') hideGlossPopup();
     } catch { /* noop */ }
@@ -2790,6 +2808,9 @@ JSON配列のみ返してください:
       if (bar) bar.remove();
       const notif = document.getElementById('mut-notification');
       if (notif) notif.remove();
+      // document へのリスナーを外してからフラグを戻す。順序が逆でも動くが、
+      // 外し忘れると再注入のたびにリスナーが積み上がる
+      runTeardown();
       // 再有効化時に再注入できるようフラグをリセット
       window.__dougInitialized = false;
       return;

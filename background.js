@@ -28,6 +28,7 @@ import {
 import { buildGlossPrompt, parseGlossResponse } from './utils/gloss-summary.js';
 import { sanitizePairForNano, parseCandidatesJson, buildExtractionPrompt } from './utils/nano-extract.js';
 import { isUsable } from './utils/gloss-cache.js';
+import { planGlossGeneration, seriesNameAttempts } from './utils/gloss-policy.js';
 
 // ============================================================
 // マイグレーション: sync → local への移行
@@ -372,16 +373,12 @@ async function tryWikipediaQuery(term, seriesName) {
  * シリーズ名付きを先に試すからこそフォールバックが安全に成立する。
  */
 async function fetchWikipediaEntry(term, seriesName) {
-  const first = await tryWikipediaQuery(term, seriesName);
-  if (first) return first;
-
-  // シリーズ名を渡していない場合は再試行しても同じクエリになるので打ち切る。
-  // 判定は buildSearchUrl と同じ正規化（二重引用符除去 → trim）で行う。
-  // trim だけだと seriesName が '"' のとき非空と見なされ、同一クエリを 2 回投げる
-  const s = String(seriesName ?? '').split('"').join('').trim();
-  if (s === '') return null;
-
-  return tryWikipediaQuery(term, '');
+  // 試す順序は utils/gloss-policy.js の seriesNameAttempts が決める（テスト可能にするため）
+  for (const attempt of seriesNameAttempts(seriesName)) {
+    const hit = await tryWikipediaQuery(term, attempt);
+    if (hit) return hit;
+  }
+  return null;
 }
 
 /** Nano で解説を生成する。不可・失敗は null */
@@ -418,8 +415,7 @@ async function generateWithNano(prompt, term) {
  * エンジン設定が nano 固定なら呼ばない。
  */
 async function generateGlossWithApi(prompt, term) {
-  const { glossEngine = 'auto' } = await chrome.storage.local.get('glossEngine');
-  if (glossEngine === 'nano') return null;
+  // エンジン判定は呼び出し側の planGlossGeneration に一本化した（二重に持たない）
   const text = await callTextOnlyProvider(prompt);
   return text ? parseGlossResponse(text, term) : null;
 }
@@ -467,9 +463,11 @@ async function buildGlossEntry(term, seriesName, langLabel, nanoOnly = false) {
   });
 
   const { glossEngine = 'auto' } = await chrome.storage.local.get('glossEngine');
-  let parsed = glossEngine === 'api' ? null : await generateWithNano(prompt, term);
+  const plan = planGlossGeneration({ glossEngine, nanoOnly });
+  let parsed = plan.tryNano ? await generateWithNano(prompt, term) : null;
   if (!parsed) {
-    if (nanoOnly) return null; // 先読みでは有料 API を呼ばない。失敗としてキャッシュもしない
+    // 先読み（nanoOnly）では有料 API を呼ばない。失敗としてキャッシュもしない
+    if (!plan.allowApiFallback) return nanoOnly ? null : { failed: true, at: now };
     parsed = await generateGlossWithApi(prompt, term);
   }
   if (!parsed) return { failed: true, at: now };
