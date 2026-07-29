@@ -379,7 +379,7 @@ async function fetchWikipediaEntry(term, seriesName) {
 }
 
 /** Nano で解説を生成する。不可・失敗は null */
-async function generateWithNano(prompt) {
+async function generateWithNano(prompt, term) {
   if (!(await isNanoAvailableBg())) return null;
 
   const controller = new AbortController();
@@ -402,18 +402,18 @@ async function generateWithNano(prompt) {
     clearTimeout(timeoutId);
     if (session) session.destroy();
   }
-  return parseGlossResponse(text);
+  return parseGlossResponse(text, term);
 }
 
 /**
  * Nano が使えない / 失敗した場合のフォールバック。
  * エンジン設定が nano 固定なら呼ばない。
  */
-async function generateGlossWithApi(prompt) {
+async function generateGlossWithApi(prompt, term) {
   const { glossEngine = 'auto' } = await chrome.storage.local.get('glossEngine');
   if (glossEngine === 'nano') return null;
   const text = await callTextOnlyProvider(prompt);
-  return text ? parseGlossResponse(text) : null;
+  return text ? parseGlossResponse(text, term) : null;
 }
 
 // ソース契約（設計書 §3）。他ソースを足すときはこの配列に 1 要素増やすだけにする。
@@ -459,10 +459,10 @@ async function buildGlossEntry(term, seriesName, langLabel, nanoOnly = false) {
   });
 
   const { glossEngine = 'auto' } = await chrome.storage.local.get('glossEngine');
-  let parsed = glossEngine === 'api' ? null : await generateWithNano(prompt);
+  let parsed = glossEngine === 'api' ? null : await generateWithNano(prompt, term);
   if (!parsed) {
     if (nanoOnly) return null; // 先読みでは有料 API を呼ばない。失敗としてキャッシュもしない
-    parsed = await generateGlossWithApi(prompt);
+    parsed = await generateGlossWithApi(prompt, term);
   }
   if (!parsed) return { failed: true, at: now };
 

@@ -60,10 +60,38 @@ describe('parseGlossResponse', () => {
   });
 
   it('上限超過は句点で切る（R-W16。文中では切らない）', () => {
-    const long = 'あ'.repeat(70) + '。' + 'い'.repeat(40) + '。';
+    // 上限値そのものに依存しないよう POWERS_MAX から組み立てる
+    const head = 'あ'.repeat(POWERS_MAX - 10) + '。';
+    const long = head + 'い'.repeat(30) + '。';
     const r = parseGlossResponse(JSON.stringify({ identity: 'A', powers: long }));
-    expect(r.powers).toBe('あ'.repeat(70) + '。');
+    expect(r.powers).toBe(head);
     expect(r.powers.length).toBeLessThanOrEqual(POWERS_MAX);
+  });
+
+  it('identity が用語名のオウム返しなら捨てる（実機で S.H.I.E.L.D. だけが返った）', () => {
+    const r = parseGlossResponse(
+      '{"identity":"S.H.I.E.L.D.","powers":"国際安全保障を維持する。"}', 'S.H.I.E.L.D.'
+    );
+    expect(r).toEqual({ identity: '', powers: '国際安全保障を維持する。' });
+  });
+
+  it('記号や大小文字が違うだけのオウム返しも捨てる', () => {
+    const r = parseGlossResponse(
+      '{"identity":"シールド","powers":"諜報活動を行う。"}', 'シールド'
+    );
+    expect(r.identity).toBe('');
+  });
+
+  it('用語名を含んでいても説明があれば残す', () => {
+    const r = parseGlossResponse(
+      '{"identity":"S.H.I.E.L.D. はマーベル世界の諜報機関である。","powers":""}', 'S.H.I.E.L.D.'
+    );
+    expect(r.identity).toBe('S.H.I.E.L.D. はマーベル世界の諜報機関である。');
+  });
+
+  it('term を渡さなければオウム返し判定はしない（後方互換）', () => {
+    const r = parseGlossResponse('{"identity":"S.H.I.E.L.D.","powers":""}');
+    expect(r.identity).toBe('S.H.I.E.L.D.');
   });
 
   it('片方が不正でも、もう片方が有効なら空文字を添えて返す', () => {
