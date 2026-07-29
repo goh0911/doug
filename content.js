@@ -1978,10 +1978,20 @@ JSON配列のみ返してください:
   function showGlossPopup(spanEl) {
     // 150ms の遅延中に renderTranslatedText の再描画で span が差し替えられている場合、
     // getBoundingClientRect() が全ゼロを返しポップアップが左上に取り残されるため何もしない
-    if (!spanEl.isConnected) return;
+    if (!spanEl.isConnected) {
+      console.info('[gloss] ポップアップ中止: span が DOM から外れている');
+      return;
+    }
     const key = spanEl.dataset.glossKey;
     const def = currentGlossDefs[key];
-    if (!def) return;
+    if (!def) {
+      // 下線は出るのにポップアップが出ない、を無言にしないための記録。
+      // span は currentGlossDefs から作られるので、ここに来るのは
+      // 解説が後から破棄された（clearOverlays 等）ときに限られるはず
+      console.info('[gloss] ポップアップ中止: 解説なし key=', key,
+        '保持数=', Object.keys(currentGlossDefs).length);
+      return;
+    }
     hideGlossPopup();
 
     const popup = document.createElement('div');
