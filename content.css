@@ -392,8 +392,6 @@
   /* overlayContainer と同じビューポート座標系に揃える（content.js 側で
      getBoundingClientRect() をスクロールオフセット無しで使う。最終レビュー Important 2） */
   position: fixed;
-  /* 親が visibility:hidden でも継承しない。実機で、リーダーが伏せている
-     dialog 配下に置かれてポップアップが不可視になった */
   visibility: visible;
   z-index: 999999;
   max-width: 280px;
@@ -406,6 +404,18 @@
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   line-height: 1.5;
   pointer-events: auto;
+}
+
+/* サイト側が [role="tooltip"] を伏せる汎用 CSS を持っている場合に負けないようにする。
+   Marvel のリーダーで実測: ポップアップ自身が visibility:hidden / position:absolute /
+   z-index:100 を奪われていた（.doug-gloss-popup と [role="tooltip"] は詳細度が
+   同点(0,1,0)で、後から読み込まれるサイト側が勝つ）。
+   role="tooltip" は読み上げのために外せないので、id 詳細度 + !important で確実に勝つ。
+   表示に不可欠な 3 プロパティだけに限定する（見た目はサイト側に譲ってよい）。 */
+#doug-gloss-popup.doug-gloss-popup {
+  position: fixed !important;
+  visibility: visible !important;
+  z-index: 999999 !important;
 }
 
 .doug-gloss-identity { font-weight: 600; }
