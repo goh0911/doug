@@ -105,17 +105,41 @@ export function extractPowers(extract) {
 const INTRO_MIN_LENGTH = 60;
 
 /**
- * 照合用の正規化。曖昧さ回避の括弧を落とし、記号を除去して空白を畳む。
- * S.H.I.E.L.D. → shield / Spider-Man → spiderman のように、
- * 表記の揺れを吸収したうえで比較できるようにする。
+ * 照合用の正規化。記号を除去して空白を畳む。
+ * S.H.I.E.L.D. → shield / Spider-Man → spiderman のように表記の揺れを吸収する。
  */
 function normalizeForMatch(s) {
   return String(s ?? '')
     .toLowerCase()
-    .replace(/\([^)]*\)/g, ' ')
+    // 括弧類は語の区切りとして空白にする。除去すると語境界が消え、
+    // "(carl crusher creel)" の末尾が閉じ括弧のままで一致しなくなる
+    .replace(/[()[\]{}<>/|]/g, ' ')
     .replace(/[.'‘’\-–—_,:;!?"]/g, '')
     .replace(/\s+/g, ' ')
     .trim();
+}
+
+/**
+ * タイトル用の正規化。曖昧さ回避の括弧を落としてから正規化する
+ * （Vision (Marvel Comics) → vision）。
+ * 本文には使わない。本文の括弧には実名が入るため
+ * （Absorbing Man (Carl "Crusher" Creel)）、落とすと別名照合が壊れる。
+ */
+function normalizeTitleForMatch(s) {
+  return normalizeForMatch(String(s ?? '').replace(/\([^)]*\)/g, ' '));
+}
+
+/** 導入節の最初の段落だけを返す。記事の定義部分はここに書かれる */
+function firstParagraph(intro) {
+  const s = String(intro ?? '').trim();
+  if (s === '') return '';
+  const idx = s.search(/\n\s*\n|\n/);
+  return idx === -1 ? s : s.slice(0, idx).trim();
+}
+
+/** 正規表現に埋め込むためのエスケープ */
+function escapeRegExp(s) {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
 /**
@@ -128,8 +152,11 @@ function normalizeForMatch(s) {
  * 「別人の解説」を表示していた。
  *
  * タイトル一致だけを条件にすると別名が落ちる（Red Hulk → 記事名 Thunderbolt Ross、
- * Tony Stark → Iron Man）ため、導入節に語が現れることも許容する。
- * 導入節は記事の定義部分なので、無関係な記事が偶然含む可能性は低い。
+ * Tony Stark → Iron Man）ため、導入節も見る。ただし照合範囲は**最初の段落まで**。
+ * 導入節を丸ごと対象にすると関連作品の記述に引っかかる（実測: Absorbing Man の
+ * 2 段落目にある "Agents of S.H.I.E.L.D." が S.H.I.E.L.D. と一致してしまった）。
+ *
+ * 一致は語境界つき（shielded / shields のような部分一致を避ける）。
  *
  * @param {string} term 検索語（glossary の原語）
  * @param {string} title 取得した記事タイトル
@@ -139,8 +166,8 @@ function normalizeForMatch(s) {
 export function termAppearsIn(term, title, intro) {
   const t = normalizeForMatch(term);
   if (t === '') return false;
-  const haystack = normalizeForMatch(`${title ?? ''} ${intro ?? ''}`);
-  return haystack.includes(t);
+  const haystack = `${normalizeTitleForMatch(title)} ${normalizeForMatch(firstParagraph(intro))}`;
+  return new RegExp(`(^| )${escapeRegExp(t)}($| )`).test(haystack);
 }
 
 /**

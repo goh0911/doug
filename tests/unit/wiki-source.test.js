@@ -117,9 +117,28 @@ describe('termAppearsIn', () => {
     expect(termAppearsIn('RED HULK', 'Thunderbolt Ross', intro)).toBe(true);
   });
 
+  // 実機で取得した Absorbing Man の導入節そのもの。2 段落目の
+  // "Agents of S.H.I.E.L.D."（映像化作品）に一致して素通りしていた
+  const ABSORBING_MAN_INTRO = [
+    'Absorbing Man (Carl "Crusher" Creel) is a character appearing in American comic books published by Marvel Comics. Carl Creel has the power to absorb and become any material he touched.',
+    'He appears in the Marvel Cinematic Universe TV series Agents of S.H.I.E.L.D., portrayed by Brian Patrick Wade.',
+  ].join('\n');
+
   it('無関係な記事は落とす（実測: S.H.I.E.L.D. → Absorbing Man）', () => {
-    const intro = 'The Absorbing Man is a supervillain appearing in American comic books.';
-    expect(termAppearsIn('S.H.I.E.L.D.', 'Absorbing Man', intro)).toBe(false);
+    expect(termAppearsIn('S.H.I.E.L.D.', 'Absorbing Man', ABSORBING_MAN_INTRO)).toBe(false);
+  });
+
+  it('2 段落目の関連作品に一致しない（照合は最初の段落まで）', () => {
+    expect(termAppearsIn('AGENTS OF SHIELD', 'Absorbing Man', ABSORBING_MAN_INTRO)).toBe(false);
+  });
+
+  it('最初の段落にある別名は拾う', () => {
+    expect(termAppearsIn('CRUSHER CREEL', 'Absorbing Man', ABSORBING_MAN_INTRO)).toBe(true);
+  });
+
+  it('語境界を要求する（shield が shielded に一致しない）', () => {
+    const intro = 'The hero is heavily shielded against comic book radiation in this story.';
+    expect(termAppearsIn('S.H.I.E.L.D.', 'Some Hero', intro)).toBe(false);
   });
 
   it('無関係な記事は落とす（実測: Gamma Base → Betty Ross）', () => {
