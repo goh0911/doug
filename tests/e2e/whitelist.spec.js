@@ -34,14 +34,14 @@ test.describe('ホワイトリスト操作', () => {
     await page.waitForLoadState('load', { timeout: 30_000 });
 
     // ツールバーが表示されていることを確認
-    await expect(page.locator('#doug-toolbar')).toBeVisible({ timeout: 10_000 });
+    await expect(page.locator('#mut-toolbar')).toBeVisible({ timeout: 10_000 });
     await popupPage.close();
   });
 
   test('サイトを削除するとツールバーが消える', async ({ page, context }) => {
     // 前提: サイトが登録済みであること（Task 7-1 の後に実行）
     await page.goto(TEST_SITE);
-    const isToolbarVisible = await page.locator('#doug-toolbar').isVisible({ timeout: 5_000 }).catch(() => false);
+    const isToolbarVisible = await page.locator('#mut-toolbar').isVisible({ timeout: 5_000 }).catch(() => false);
     if (!isToolbarVisible) {
       test.skip(); // 未登録なら skip
       return;
@@ -56,7 +56,7 @@ test.describe('ホワイトリスト操作', () => {
     await disableBtn.click();
 
     // ツールバーが消えることを確認
-    await expect(page.locator('#doug-toolbar')).toBeHidden({ timeout: 10_000 });
+    await expect(page.locator('#mut-toolbar')).toBeHidden({ timeout: 10_000 });
     await popupPage.close();
   });
 });
