@@ -96,7 +96,10 @@ export function extractPowers(extract) {
     for (let j = i + 1; j < heads.length; j++) {
       if (heads[j].depth <= heads[i].depth) { end = heads[j].start; break; }
     }
-    return extract.slice(heads[i].end, end).trim();
+    // 能力節の中の小見出し（==== Bruce Banner ==== 等）は本文ではないので落とす。
+    // 残すと解説の先頭がマークアップになり、しかもそれを訳そうとして
+    // 人名を崩す（実機: "==== ブーリス・バナー ====" ＝ Bruce の誤り）
+    return stripHeadings(extract.slice(heads[i].end, end));
   }
   return '';
 }
@@ -242,6 +245,16 @@ function subjectOfFirstSentence(paragraph) {
   const sentence = endMatch ? s.slice(0, endMatch.index + 1) : s;
   const copula = sentence.match(/\s(?:is|was|are|were)\s/i);
   return copula ? sentence.slice(0, copula.index) : sentence;
+}
+
+/** 見出し行（== X == 〜 ====== X ======）を取り除き、空行を畳む */
+function stripHeadings(text) {
+  return String(text ?? '')
+    .split('\n')
+    .filter((line) => !new RegExp(HEADING_SOURCE).test(line))
+    .join('\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
 }
 
 /**

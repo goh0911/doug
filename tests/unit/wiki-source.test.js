@@ -86,15 +86,36 @@ describe('extractPowers', () => {
   });
 
   // R-W2''：深さを無視すると小見出しで終端して本文0字になる（Moon Knight / Sentry の実測不具合）
-  it('より深い小見出しは終端にせず内容に含める', () => {
+  it('より深い小見出しは終端にせず、その本文を含める（見出し行自体は落とす）', () => {
     const p = extractPowers(ARTICLE);
-    expect(p).toContain('=== Density control ===');
+    // R-W2'': 深い見出しで打ち切らない。本文が残っていることで確認する
     expect(p).toContain('alter his density');
+    // 見出しのマークアップは解説に出さない
+    expect(p).not.toContain('=== Density control ===');
+    expect(p).not.toMatch(/^={2,6}/m);
   });
 
   it('見出しの揺れ（Powers, abilities, and resources）も拾う', () => {
     const a = '== Powers, abilities, and resources ==\nZatanna speaks backwards.\n\n== Legacy ==\nx';
     expect(extractPowers(a)).toBe('Zatanna speaks backwards.');
+  });
+
+  it('能力節の中の小見出しを落とす（実機で "==== ブーリス・バナー ====" が解説に出た）', () => {
+    const a = [
+      '== Powers and abilities ==',
+      '',
+      '==== Bruce Banner ====',
+      'Bruce is considered one of the greatest minds.',
+      '',
+      '==== The Hulk ====',
+      'The Hulk has limitless strength.',
+      '',
+      '== Reception ==',
+      'Good.',
+    ].join('\n');
+    const powers = extractPowers(a);
+    expect(powers).not.toMatch(/^={2,6}/m);
+    expect(powers).toBe('Bruce is considered one of the greatest minds.\n\nThe Hulk has limitless strength.');
   });
 
   it('能力節が無ければ空文字', () => {
