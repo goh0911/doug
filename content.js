@@ -31,7 +31,6 @@
   /* eslint-disable-next-line no-unused-vars */
   const PANEL_CROP_PADDING     = 0.07; // crop時のパディング率（フェーズ4で使用）
   const BUBBLE_CROP_PADDING    = 0.15; // 吹き出し単体crop時のパディング率（個別再翻訳）
-  const PANEL_HOVER_EXPAND     = 15;   // パネルホバー検出を bbox から ±N% 拡張（吹き出し bbox が小さい場合の補正）
   const SEED_SAMPLE_SIZE       = 5;    // 起点サンプル固定サイズ（5×5）
   const STABLE_CHECK_INTERVAL  = 100;  // 安定判定チェック間隔（ピクセル数、大パネルの早期終了防止で50→100）
 
@@ -223,6 +222,38 @@
     return { translations: out, totalHits };
   }
 
+  // utils/gloss-highlight.js のコピー。
+  // 変更したら utils/gloss-highlight.js も必ず同期すること。
+  // escapeRegExp は glossary-substitute のコピー由来のものを再利用する（重複定義しない）。
+  function splitByTerms(text, terms) {
+    if (typeof text !== 'string' || text === '') return [];
+
+    const byMatch = new Map();
+    if (Array.isArray(terms)) {
+      for (const t of terms) {
+        if (!t || typeof t.match !== 'string' || t.match === '') continue;
+        if (typeof t.key !== 'string' || t.key === '') continue;
+        if (!byMatch.has(t.match)) byMatch.set(t.match, t.key);
+      }
+    }
+    if (byMatch.size === 0) return [{ text, key: null }];
+
+    // 長い順（ハルクバスター を ハルク より先に）
+    const sorted = [...byMatch.keys()].sort((a, b) => b.length - a.length);
+    const re = new RegExp(sorted.map(escapeRegExp).join('|'), 'g');
+
+    const out = [];
+    let last = 0;
+    let m;
+    while ((m = re.exec(text)) !== null) {
+      if (m.index > last) out.push({ text: text.slice(last, m.index), key: null });
+      out.push({ text: m[0], key: byMatch.get(m[0]) });
+      last = m.index + m[0].length;
+    }
+    if (last < text.length) out.push({ text: text.slice(last), key: null });
+    return out;
+  }
+
   // ============================================================
 
   async function translateWithOllamaDirect(imageDataUrl) {
@@ -402,6 +433,20 @@ JSON配列のみ返してください:
       '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">' +
       '<line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>');
 
+    // 再翻訳モード: ON の間は解説ポップアップを出さず、再翻訳ボタンだけを出す。
+    // 通常モードでは解説が優先され、解説表示中は再翻訳ボタンを抑制する
+    const modeBtn = document.createElement('button');
+    modeBtn.id = 'mut-btn-mode';
+    modeBtn.className = 'mut-btn';
+    modeBtn.title = '再翻訳モード（解説を出さずパネル再翻訳ボタンを使う）';
+    modeBtn.style.display = 'none';
+    modeBtn.setAttribute('aria-pressed', 'false');
+    modeBtn.insertAdjacentHTML('afterbegin',
+      '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">' +
+      '<path d="M23 4v6h-6"/><path d="M1 20v-6h6"/>' +
+      '<path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>' +
+      '</svg>');
+
     const debugBtn = document.createElement('button');
     debugBtn.id = 'mut-btn-debug';
     debugBtn.className = 'mut-btn';
@@ -419,7 +464,7 @@ JSON配列のみ返してください:
     seriesIndicator.className = 'mut-series-indicator mut-series-indicator--none';
     seriesIndicator.textContent = '📚 検出不可';
 
-    toolbar.append(translateBtn, autoBtn, toggleBtn, clearBtn, debugBtn, seriesIndicator);
+    toolbar.append(translateBtn, autoBtn, toggleBtn, clearBtn, modeBtn, debugBtn, seriesIndicator);
     const parent = getUIParent();
     parent.appendChild(toolbar);
 
@@ -438,6 +483,7 @@ JSON配列のみ返してください:
     document.getElementById('mut-btn-auto').addEventListener('click', toggleAutoTranslate);
     document.getElementById('mut-btn-toggle').addEventListener('click', toggleOverlays);
     document.getElementById('mut-btn-clear').addEventListener('click', clearOverlays);
+    document.getElementById('mut-btn-mode').addEventListener('click', toggleRetranslateMode);
     document.getElementById('mut-btn-debug').addEventListener('click', () => {
       if (_debugCanvas) {
         clearPanelDebug();
@@ -477,7 +523,31 @@ JSON配列のみ返してください:
   function showExtraButtons() {
     document.getElementById('mut-btn-toggle').style.display = '';
     document.getElementById('mut-btn-clear').style.display = '';
+    document.getElementById('mut-btn-mode').style.display = '';
     document.getElementById('mut-btn-debug').style.display = '';
+  }
+
+  // 再翻訳モードの ON/OFF。ON にした時点で出ている解説は閉じる
+  function toggleRetranslateMode() {
+    retranslateMode = !retranslateMode;
+    const btn = document.getElementById('mut-btn-mode');
+    if (btn) {
+      btn.classList.toggle('mut-btn-active', retranslateMode);
+      btn.setAttribute('aria-pressed', retranslateMode ? 'true' : 'false');
+      btn.title = retranslateMode
+        ? '再翻訳モード: ON（解説は出ません）'
+        : '再翻訳モード（解説を出さず再翻訳ボタンを使う）';
+    }
+    if (retranslateMode) hideGlossPopup();
+    applyRetranslateMode();
+  }
+
+  // overlayContainer にモードを反映する。再翻訳ボタン 3 種の表示は
+  // content.css の #mut-overlay-container:not(.mut-retranslate-mode) 側で止める。
+  // renderOverlays がコンテナを作り直すたびに呼ぶ必要がある
+  function applyRetranslateMode() {
+    if (!overlayContainer) return;
+    overlayContainer.classList.toggle('mut-retranslate-mode', retranslateMode);
   }
 
   // v2 Phase 1: シリーズインジケーター更新
@@ -520,10 +590,123 @@ JSON配列のみ返してください:
           updateSeriesIndicator(seriesInfo);
         }
       }
+
+      // 設計書 §4.1: 翻訳完了を待たず、シリーズ検出直後に glossary 先読みを開始する（応答は待たない）
+      if (seriesInfo && seriesInfo.seriesId) {
+        triggerGlossPrefetch(seriesInfo.seriesId, seriesInfo.series);
+      }
     } catch {
       seriesInfo = null;
       updateSeriesIndicator(null);
     }
+  }
+
+  const LANG_LABELS = { ja: '日本語', en: 'English', ko: '한국어', 'zh-CN': '简体中文', 'zh-TW': '繁體中文' };
+
+  // 設計書 §4.1: 翻訳完了を待たず、シリーズ検出直後に先読みを開始する。
+  // ページ読み込み時点では本文が画像なので、対象はシリーズの glossary 登録語全体。
+  // glossary は 2 KB 上限のため語数は実質 30 語弱に有界化される。
+  async function prefetchGlossDefs(series, targetLang) {
+    if (!series || !series.seriesId) return;
+    // OFF 中は Wikipedia fetch や生成 API 呼び出しを一切発生させない（既定 false）
+    const { glossEnabled = false } = await chrome.storage.local.get('glossEnabled');
+    if (!glossEnabled) return;
+    // 設計書 §4.1: 先読みの発火条件は「生成エンジンが Nano」。api 固定（品質優先）では
+    // 先読みしても使われない Wikipedia fetch が発生するだけなのでここで止める。
+    // 'auto' は Nano が実際に使えるか background 側でしか分からないため通す
+    // （課金防止そのものは background.js の nanoOnly ゲートが担保する）
+    const { glossEngine = 'auto' } = await chrome.storage.local.get('glossEngine');
+    if (glossEngine === 'api') return;
+    const langMap = (series.glossary && series.glossary[targetLang]) || {};
+    // 解説ポップアップは未承認候補（Nano 自動抽出の approved:false）も対象にする。
+    // 層B置換（utils/glossary-substitute.js）が approved を要求するのは訳文を書き換えるためで、
+    // 解説は誤った語なら background 側の検証ゲートで落ちて何も表示されない。危険度が違う。
+    // ※ 層B置換側の approved ゲートは維持すること（訳文汚染を防ぐ唯一の関門）
+    // 先読みは background 側で nanoOnly:true なので、この経路から課金は発生しない
+    const terms = Object.keys(langMap).filter((k) => {
+      const e = langMap[k];
+      return e && typeof e.translated === 'string' && e.translated !== '';
+    });
+    if (terms.length === 0) return;
+    chrome.runtime.sendMessage({
+      type: 'PREFETCH_GLOSS_DEFS',
+      seriesId: series.seriesId,
+      seriesName: series.name,
+      terms,
+      targetLang,
+      langLabel: LANG_LABELS[targetLang] || '日本語',
+    }).catch(() => { /* 失敗は表示しない */ });
+  }
+
+  // 翻訳完了後に解説を取り込み、描画済みオーバーレイを後追いで span 化する
+  async function loadGlossDefs(series, targetLang) {
+    if (!series || !series.seriesId) return;
+    const { glossEnabled = false } = await chrome.storage.local.get('glossEnabled');
+    if (!glossEnabled) return;
+
+    const langMap = (series.glossary && series.glossary[targetLang]) || {};
+    // 解説ポップアップは未承認候補（Nano 自動抽出の approved:false）も対象にする。
+    // 層B置換（utils/glossary-substitute.js）が approved を要求するのは訳文を書き換えるためで、
+    // 解説は誤った語なら background 側の検証ゲートで落ちて何も表示されない。危険度が違う。
+    // ※ 層B置換側の approved ゲートは維持すること（訳文汚染を防ぐ唯一の関門）
+    //
+    // 【課金の上界】この経路は先読みと違い nanoOnly:false で、Nano が使えない環境では
+    // 未承認語でも翻訳用 API が呼ばれる（approved がかつて担っていた歯止めが外れる）。
+    // 上界は「シリーズの glossary 登録語の異なり数 × 1 回」:
+    //   - glossEnabled が既定 false、かつ en.wikipedia.org の権限許可が要る
+    //   - Wikipedia 取得と検証ゲートが先で、素材が取れない語は API に到達しない
+    //   - 下の buildGlossTermList で 1 回の要求は 30 語に上限化
+    //   - 成功も失敗も glossDefs にキャッシュ（失敗は FAILED_TTL_MS=24h の負キャッシュ）
+    //     されるため、同じ語で繰り返し課金されない
+    // API フォールバックを approved 限定に戻さないこと。Nano 不可環境で自動抽出語の解説が
+    // 無言で出なくなり、この機能を導入した動機（承認作業なしに解説を出す）が消える。
+    const terms = Object.keys(langMap).filter((k) => {
+      const e = langMap[k];
+      return e && typeof e.translated === 'string' && e.translated !== '';
+    });
+    if (terms.length === 0) return;
+
+    let response = null;
+    try {
+      response = await chrome.runtime.sendMessage({
+        type: 'GET_GLOSS_DEFS',
+        seriesId: series.seriesId,
+        seriesName: series.name,
+        terms,
+        targetLang,
+        langLabel: LANG_LABELS[targetLang] || '日本語',
+      });
+    } catch {
+      return; // 失敗は表示しない（設計書 §10）
+    }
+
+    if (!response || !response.defs) return;
+    currentGlossDefs = response.defs;
+    currentGlossTerms = buildGlossTermList(currentGlossDefs, langMap);
+    applyGlossToRenderedOverlays();
+  }
+
+  // DETECT_SERIES / DETECT_SERIES_NANO の応答には glossary が含まれないため、
+  // GET_SERIES で取り直してから prefetchGlossDefs に渡す
+  async function triggerGlossPrefetch(seriesId, seriesName) {
+    try {
+      const { targetLang = 'ja' } = await chrome.storage.local.get('targetLang');
+      const series = await chrome.runtime.sendMessage({ type: 'GET_SERIES', payload: { seriesId } });
+      if (!series) return;
+      // prefetchGlossDefs は非同期になったが（glossEnabled 判定のため）、
+      // ここで await して例外を上の try/catch に集約する（未処理rejection防止）
+      await prefetchGlossDefs({ seriesId, name: seriesName, glossary: series.glossary }, targetLang);
+    } catch { /* 失敗は表示しない */ }
+  }
+
+  // RECORD_SERIES_TRANSLATION 後の最新 glossary を GET_SERIES で取り直してから loadGlossDefs に渡す
+  async function triggerGlossLoad(seriesId, seriesName) {
+    try {
+      const { targetLang = 'ja' } = await chrome.storage.local.get('targetLang');
+      const series = await chrome.runtime.sendMessage({ type: 'GET_SERIES', payload: { seriesId } });
+      if (!series) return;
+      await loadGlossDefs({ seriesId, name: seriesName, glossary: series.glossary }, targetLang);
+    } catch { /* 失敗は表示しない */ }
   }
 
   // ============================================================
@@ -760,12 +943,10 @@ JSON配列のみ返してください:
       const onAdjusted = imageUrl ? (idx, style) => saveAdjustment(imageUrl, idx, style) : null;
       renderOverlays(getOverlayTarget(comicInfo), response.translations, adjustments, onAdjusted, capturedRect);
       showExtraButtons();
-      // フェーズ3: パネル再翻訳ボタンを非同期で追加（翻訳表示をブロックしない）
+      // パネルのグルーピングは bbox デバッグ表示（showPanelDebug）で使うため残す。
+      // パネル単位の再翻訳ボタンは廃止し、再翻訳は吹き出し単位に一本化した
       computePanelGroups(imageData, response.translations).then(pg => {
         _lastPanelGroups = pg;
-        console.log('[doug] computePanelGroups result:', pg ? `${pg.groups.length} groups` : 'null');
-        if (overlayContainer) addPanelRetranslateButtons(pg);
-        else console.log('[doug] overlayContainer is null, skipping addPanelRetranslateButtons');
       }).catch((err) => { console.log('[doug] computePanelGroups error:', err); });
 
       // v2 Phase 2A: 翻訳成功時にシリーズを記録（seriesInfo が検出済みの場合のみ）
@@ -782,6 +963,9 @@ JSON配列のみ返してください:
             pairs: (response && Array.isArray(response.pairs)) ? response.pairs : [],
           },
         }).catch(() => { /* 記録失敗は翻訳結果に影響させない */ });
+
+        // 翻訳完了後に解説を取り込み、描画済みオーバーレイを後追いで span 化する
+        triggerGlossLoad(seriesInfo.seriesId, seriesInfo.series);
       }
 
       const message = response.fromCache
@@ -1575,98 +1759,6 @@ JSON配列のみ返してください:
     }
   }
 
-  // ============================================================
-  // フェーズ3: パネル再翻訳ボタンを overlayContainer に追加
-  // mousemove で各パネル bbox 内にカーソルがあるか判定して表示/非表示を切り替える
-  // ============================================================
-  function addPanelRetranslateButtons(pgResult) {
-    if (!overlayContainer || !pgResult || pgResult.groups.length === 0) {
-      console.log('[doug] addPanelRetranslateButtons early return:', { hasContainer: !!overlayContainer, hasPgResult: !!pgResult, groupsLen: pgResult?.groups?.length });
-      return;
-    }
-    console.log('[doug] addPanelRetranslateButtons: adding buttons for', pgResult.groups.length, 'groups');
-
-    const btns = [];
-
-    for (const group of pgResult.groups) {
-      const { left, top, width, height } = group.unionBboxPct;
-      // ホバー検出用（PANEL_HOVER_EXPAND分拡張、0〜100にクランプ）
-      const hLeft   = Math.max(0,   left - PANEL_HOVER_EXPAND);
-      const hTop    = Math.max(0,   top  - PANEL_HOVER_EXPAND);
-      const hRight  = Math.min(100, left + width  + PANEL_HOVER_EXPAND);
-      const hBottom = Math.min(100, top  + height + PANEL_HOVER_EXPAND);
-
-      // ボタン（位置は mousemove で動的に設定）
-      const btn = document.createElement('button');
-      btn.className = 'mut-panel-retranslate-btn';
-      btn.title = 'このパネルを再翻訳';
-      btn.dataset.groupId = String(group.groupId);
-      // 初期位置はオフスクリーン（mousemove 前に見えないようにするため）
-      btn.style.left = '-100px';
-      btn.style.top  = '-100px';
-      btn.insertAdjacentHTML('afterbegin',
-        '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">' +
-        '<path d="M23 4v6h-6"/>' +
-        '<path d="M1 20v-6h6"/>' +
-        '<path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>' +
-        '</svg>');
-
-      btn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        retranslatePanel(group, pgResult.W, pgResult.H);
-      });
-
-      overlayContainer.appendChild(btn);
-      // bbox 中心座標（距離比較用）
-      const cx = left + width  / 2;
-      const cy = top  + height / 2;
-      btns.push({ btn, hbox: { left: hLeft, top: hTop, right: hRight, bottom: hBottom }, cx, cy });
-    }
-
-    // マウス位置でボタン表示/非表示
-    // カーソルがパネル hbox に入った瞬間の座標にボタンを固定（sticky position）
-    let currentGroupId = null;
-    const panelMoveHandler = (e) => {
-      if (!overlayContainer) return;
-      const cr = overlayContainer.getBoundingClientRect();
-      if (cr.width === 0 || cr.height === 0) return;
-      const relX = (e.clientX - cr.left) / cr.width  * 100;
-      const relY = (e.clientY - cr.top)  / cr.height * 100;
-
-      // hbox 内にあるパネルのうち bbox 中心が最も近い1つを選択
-      let bestEntry = null;
-      let bestDist  = Infinity;
-      for (const entry of btns) {
-        const { hbox, cx, cy } = entry;
-        if (relX >= hbox.left && relX <= hbox.right &&
-            relY >= hbox.top  && relY <= hbox.bottom) {
-          const d = (relX - cx) ** 2 + (relY - cy) ** 2;
-          if (d < bestDist) { bestDist = d; bestEntry = entry; }
-        }
-      }
-
-      const newGid = bestEntry ? bestEntry.btn.dataset.groupId : null;
-      if (newGid !== currentGroupId) {
-        currentGroupId = newGid;
-        for (const { btn } of btns) btn.classList.remove('mut-panel-btn-visible');
-        if (bestEntry) {
-          // 吹き出しクラスターの中心に固定配置（カーソル位置に依存しない）
-          bestEntry.btn.style.left      = bestEntry.cx + '%';
-          bestEntry.btn.style.top       = bestEntry.cy + '%';
-          bestEntry.btn.style.transform = 'translate(-50%, -50%)';
-          bestEntry.btn.classList.add('mut-panel-btn-visible');
-        }
-      }
-    };
-    document.addEventListener('mousemove', panelMoveHandler, { passive: true });
-
-    // クリーンアップを既存の _cleanup に合成
-    const prevCleanup = overlayContainer._cleanup;
-    overlayContainer._cleanup = () => {
-      prevCleanup?.();
-      document.removeEventListener('mousemove', panelMoveHandler);
-    };
-  }
 
   // ============================================================
   // フェーズ4: パネル crop / 座標変換 / マージ / 再翻訳
@@ -1751,6 +1843,195 @@ JSON配列のみ返してください:
     return union <= 0 ? 0 : inter / union;
   }
 
+  // 解説の生成結果（原語 → { identity, powers, url }）と、
+  // 訳文の分割に使う { match: 訳語, key: 原語 } のリスト
+  let currentGlossDefs = {};
+  let currentGlossTerms = [];
+
+  // glossDefs と glossaryLangMap から分割用リストを作る。
+  // 解説の生成に成功した語だけを対象にする（設計書 §7.3）
+  function buildGlossTermList(defs, glossaryLangMap) {
+    if (!defs || !glossaryLangMap) return [];
+    const list = [];
+    for (const original of Object.keys(defs)) {
+      const entry = glossaryLangMap[original];
+      if (!entry || typeof entry.translated !== 'string' || entry.translated === '') continue;
+      list.push({ match: entry.translated, key: original });
+    }
+    return list;
+  }
+
+  // 既に描画済みのオーバーレイを後追いで span 化する。
+  // textContent を読み直して再分割するため、何度呼んでも結果は変わらない（冪等）
+  function applyGlossToRenderedOverlays() {
+    if (currentGlossTerms.length === 0) return;
+    const nodes = document.querySelectorAll('#mut-overlay-container .mut-overlay-text');
+    nodes.forEach((el) => {
+      const text = el.textContent;
+      if (typeof text !== 'string' || text === '') return;
+      renderTranslatedText(el, text, currentGlossTerms);
+    });
+  }
+
+  // 解説つき用語を <span> で包んで描画する。innerHTML は使わない（R-SEC-2）
+  // .mut-overlay-text は display:flex のため、分割ノードをそのまま子要素にすると
+  // 各ノードが個別の flex item になり折り返しが崩れる。1個の inner span にまとめて
+  // flex item を1つに保ち、内部で従来通り折り返させる。
+  function renderTranslatedText(textEl, translated, glossTerms) {
+    // パネル再翻訳等でこの textEl 配下の span を丸ごと差し替える場合、その中に現在
+    // ポップアップ中の span が含まれていれば replaceChildren で detach される前に明示的に
+    // 閉じる。mouseout は要素が消えたときに確実には発火しないため頼れない
+    // （最終レビュー Important 4 と同種の孤立ポップアップ問題）
+    if (glossPopupSpanEl && textEl.contains(glossPopupSpanEl)) hideGlossPopup();
+
+    const parts = splitByTerms(translated, glossTerms);
+    if (parts.length === 0) { textEl.textContent = translated; return; }
+
+    const nodes = parts.map((part) => {
+      if (!part.key) return document.createTextNode(part.text);
+      const span = document.createElement('span');
+      span.className = 'doug-gloss-term';
+      span.textContent = part.text;
+      span.dataset.glossKey = part.key;
+      span.tabIndex = 0;
+      return span;
+    });
+    const inner = document.createElement('span');
+    inner.className = 'doug-gloss-line';
+    inner.append(...nodes);
+    textEl.replaceChildren(inner);
+  }
+
+  // ============================================================
+  // 固有名詞解説の hover ポップアップ（設計書 §7）
+  // イベントは委譲で 1 個だけ張る（オーバーレイは動的に増えるため）
+  // ============================================================
+  let glossPopupEl = null;
+  let glossHoverTimer = null;
+  // 再翻訳モード中は解説を出さない（パネル再翻訳ボタンと競合させないため）
+  let retranslateMode = false;
+  // role="tooltip" の内容をスクリーンリーダーに関連付けるための id（設計書 §7.2）。
+  // ポップアップは常に1個しか存在しないため固定 id で足りる
+  const GLOSS_POPUP_ID = 'doug-gloss-popup';
+  let glossPopupSpanEl = null; // aria-describedby を設定した span（hideGlossPopup で解除する）
+
+  function hideGlossPopup() {
+    if (glossHoverTimer) { clearTimeout(glossHoverTimer); glossHoverTimer = null; }
+    if (glossPopupSpanEl) { glossPopupSpanEl.removeAttribute('aria-describedby'); glossPopupSpanEl = null; }
+    if (glossPopupEl) { glossPopupEl.remove(); glossPopupEl = null; }
+  }
+
+  function showGlossPopup(spanEl) {
+    // 再翻訳モード中は解説を出さない（下線は残すが hover しても反応しない）
+    if (retranslateMode) return;
+    // 150ms の遅延中に renderTranslatedText の再描画で span が差し替えられている場合、
+    // getBoundingClientRect() が全ゼロを返しポップアップが左上に取り残されるため何もしない
+    if (!spanEl.isConnected) {
+      console.info('[gloss] ポップアップ中止: span が DOM から外れている');
+      return;
+    }
+    const key = spanEl.dataset.glossKey;
+    const def = currentGlossDefs[key];
+    if (!def) {
+      // 下線は出るのにポップアップが出ない、を無言にしないための記録。
+      // span は currentGlossDefs から作られるので、ここに来るのは
+      // 解説が後から破棄された（clearOverlays 等）ときに限られるはず
+      console.info('[gloss] ポップアップ中止: 解説なし key=', key,
+        '保持数=', Object.keys(currentGlossDefs).length);
+      return;
+    }
+    hideGlossPopup();
+
+    const popup = document.createElement('div');
+    popup.id = GLOSS_POPUP_ID;
+    popup.className = 'doug-gloss-popup';
+    popup.setAttribute('role', 'tooltip');
+
+    if (def.identity) {
+      const line = document.createElement('div');
+      line.className = 'doug-gloss-identity';
+      line.textContent = def.identity;
+      popup.appendChild(line);
+    }
+    if (def.powers) {
+      const line = document.createElement('div');
+      line.className = 'doug-gloss-powers';
+      line.textContent = def.powers;
+      popup.appendChild(line);
+    }
+
+    // 出典と帰属表示（CC BY-SA。設計書 §7.2）
+    const cite = document.createElement('div');
+    cite.className = 'doug-gloss-cite';
+    let safeHref = null;
+    try {
+      const u = new URL(def.url);
+      // 生成元 origin 以外を踏ませない
+      if (u.protocol === 'https:' && u.hostname === 'en.wikipedia.org') safeHref = u.href;
+    } catch { /* 不正 URL はリンクにしない */ }
+
+    if (safeHref) {
+      const a = document.createElement('a');
+      a.href = safeHref;
+      a.target = '_blank';
+      a.rel = 'noopener noreferrer';
+      a.textContent = '出典: Wikipedia (CC BY-SA)';
+      cite.appendChild(a);
+    } else {
+      cite.textContent = '出典: Wikipedia (CC BY-SA)';
+    }
+    popup.appendChild(cite);
+
+    // overlayContainer は position:fixed でビューポート座標に追従する（observePosition）。
+    // ポップアップもビューポート座標系に揃え、document.body ではなく getUIParent() の
+    // 配下に置く（<dialog open> のリーダーでは top layer の下に document.body 配置の
+    // UI が隠れるため。最終レビュー Important 2）
+    const rect = spanEl.getBoundingClientRect();
+    popup.style.left = `${rect.left}px`;
+    popup.style.top = `${rect.bottom + 4}px`;
+    getUIParent().appendChild(popup);
+    glossPopupEl = popup;
+
+    // スクリーンリーダーで span にフォーカスしたときポップアップの内容が読み上げられるよう
+    // 関連付ける（設計書 §7.2。最終レビュー Minor 5）
+    spanEl.setAttribute('aria-describedby', GLOSS_POPUP_ID);
+    glossPopupSpanEl = spanEl;
+  }
+
+  document.addEventListener('mouseover', (e) => {
+    try {
+      const span = e.target.closest && e.target.closest('.doug-gloss-term');
+      if (!span) return;
+      // 通り過ぎでは出さない
+      if (glossHoverTimer) clearTimeout(glossHoverTimer);
+      glossHoverTimer = setTimeout(() => showGlossPopup(span), 150);
+    } catch { /* 表示に失敗しても翻訳表示には影響させない */ }
+  });
+
+  document.addEventListener('mouseout', (e) => {
+    try {
+      const span = e.target.closest && e.target.closest('.doug-gloss-term');
+      if (span) hideGlossPopup();
+    } catch { /* 表示に失敗しても翻訳表示には影響させない */ }
+  });
+
+  document.addEventListener('focusin', (e) => {
+    try {
+      const span = e.target.closest && e.target.closest('.doug-gloss-term');
+      if (span) showGlossPopup(span);
+    } catch { /* 表示に失敗しても翻訳表示には影響させない */ }
+  });
+
+  document.addEventListener('focusout', () => {
+    try { hideGlossPopup(); } catch { /* noop */ }
+  });
+
+  document.addEventListener('keydown', (e) => {
+    try {
+      if (e.key === 'Escape') hideGlossPopup();
+    } catch { /* noop */ }
+  });
+
   // changedIndices のオーバーレイに黄色ハイライトを付与し、3秒後フェードアウト
   // 新規追加分（既存 DOM に対応する data-index がない）はオーバーレイ要素を生成して追加
   function addRetranslatedOverlays(container, translations, changedIndices) {
@@ -1767,7 +2048,7 @@ JSON配列のみ返してください:
         // 置き換え対象: テキストを更新してハイライト
         const textEl = existing.querySelector('.mut-overlay-text');
         const origEl = existing.querySelector('.mut-overlay-original');
-        if (textEl) textEl.textContent = item.translated;
+        if (textEl) renderTranslatedText(textEl, item.translated, currentGlossTerms);
         if (origEl) origEl.textContent = item.original;
         // 即時黄色表示（transition なし）
         existing.classList.add('mut-retranslated');
@@ -1797,7 +2078,7 @@ JSON配列のみ返してください:
         });
         const textEl = document.createElement('div');
         textEl.className = 'mut-overlay-text';
-        textEl.textContent = item.translated;
+        renderTranslatedText(textEl, item.translated, currentGlossTerms);
         // AI が返す background / border を適用（sanitizeCssValue は content.js 内で定義済み）
         const safeBg     = sanitizeCssValue(item.background);
         const safeBorder = sanitizeCssValue(item.border);
@@ -1830,64 +2111,6 @@ JSON配列のみ返してください:
   }
 
   // パネル再翻訳のオーケストレーター
-  // group: computePanelGroups の groups[] の1要素
-  // W, H: フル画像のピクセルサイズ（_lastPanelGroups.W / H）
-  async function retranslatePanel(group, W, H) {
-    if (isTranslating) return;
-    if (!_lastImageDataUrl || !_lastTranslations) {
-      showNotification('翻訳データがありません。先にページ全体を翻訳してください。', 'warn');
-      return;
-    }
-
-    isTranslating = true;
-    try {
-      // 1. crop（Promise を返すため await が必要）
-      const cropResult = await cropPanelImage(_lastImageDataUrl, group, W, H);
-      if (!cropResult) {
-        showNotification('パネルの切り抜きに失敗しました', 'error');
-        return;
-      }
-      const { dataUrl: cropDataUrl, cropBox } = cropResult;
-
-      // 2. 翻訳（既存パイプライン流用、キャッシュ無効）
-      const response = await translateImage(cropDataUrl, null, true);
-      if (!response || response.error) {
-        showNotification(response?.error || '翻訳応答がありません', 'error');
-        return;
-      }
-
-      // 3. 0件チェック
-      const rawItems = response.translations;
-      if (!rawItems || rawItems.length === 0) {
-        showNotification('このパネルにはテキストが見つかりませんでした', 'info');
-        return;
-      }
-
-      // 4. 座標変換（crop % → フルページ %）
-      const incoming = rawItems.map(item => ({
-        ...item,
-        bbox: item.bbox ? transformBboxToFullPage(item.bbox, cropBox, W, H) : item.bbox,
-      }));
-
-      // 5. マージ
-      const { translations: merged, changedIndices } = mergeTranslations(_lastTranslations, incoming);
-
-      // 6. 状態更新
-      _lastTranslations = merged;
-
-      // 7. オーバーレイ追加・更新
-      if (overlayContainer) {
-        addRetranslatedOverlays(overlayContainer, merged, changedIndices);
-      }
-
-      // 8. 通知
-      showNotification(`${changedIndices.size}件のテキストを追加しました`, 'success');
-    } catch (err) {
-      showNotification('翻訳に失敗: ' + err.message, 'error');
-    } finally {
-      isTranslating = false;
-    }
-  }
 
   // ============================================================
   // 吹き出し単体の再翻訳
@@ -2013,9 +2236,17 @@ JSON配列のみ返してください:
       '</svg>');
     // ドラッグ起動を抑止（overlay の mousedown ハンドラに到達させない）
     btn.addEventListener('mousedown', (e) => e.stopPropagation());
-    btn.addEventListener('click', (e) => {
+    btn.addEventListener('click', async (e) => {
       e.stopPropagation();
-      retranslateBubble(origIndex);
+      // 再翻訳は API 往復で数秒かかる。押した手応えが無いと二度押しされるため、
+      // 完了までアイコンを回す（retranslateBubble は内部で例外を握るが、
+      // 念のため finally で必ず戻す）
+      btn.classList.add('mut-btn-spinning');
+      try {
+        await retranslateBubble(origIndex);
+      } finally {
+        btn.classList.remove('mut-btn-spinning');
+      }
     });
     return btn;
   }
@@ -2032,6 +2263,8 @@ JSON配列のみ返してください:
 
     overlayContainer = document.createElement('div');
     overlayContainer.id = 'mut-overlay-container';
+    // 翻訳のたびにコンテナを作り直すため、現在のモードをここで載せ直す
+    applyRetranslateMode();
     Object.assign(overlayContainer.style, {
       position: 'fixed',
       top: containerTop + 'px',
@@ -2123,7 +2356,7 @@ JSON配列のみ返してください:
 
       const textEl = document.createElement('div');
       textEl.className = 'mut-overlay-text';
-      textEl.textContent = item.translated;
+      renderTranslatedText(textEl, item.translated, currentGlossTerms);
       // LLM 応答の CSS 値を sanitize（url() によるネットワーク要求を防ぐ）
       const safeBg = sanitizeCssValue(item.background);
       const safeBorder = sanitizeCssValue(item.border);
@@ -2350,11 +2583,23 @@ JSON配列のみ返してください:
     if (!overlayContainer) return;
     overlaysVisible = !overlaysVisible;
     overlayContainer.style.display = overlaysVisible ? '' : 'none';
+    // オーバーレイを非表示にしても span は DOM に残ったままなので mouseout が
+    // 起きずポップアップだけ残る（Finding 4 と同種）。currentGlossDefs/currentGlossTerms は
+    // 再表示時に下線を復活させる必要があるためリセットしない（再レビュー Minor）
+    if (!overlaysVisible) hideGlossPopup();
   }
 
   function clearOverlays() {
     clearPanelDebug();
     _lastPanelGroups = null;
+    // glossPopupEl は overlayContainer の外（getUIParent() 直下）にあるため、
+    // overlayContainer を消しても連動して消えない。カーソル下から要素が消えても
+    // mouseout は確実には発火しないため、ここで明示的に消して孤立させない。
+    // currentGlossDefs/currentGlossTerms も同時にリセットし、SPA遷移後に前ページの
+    // キャラ解説が残らないようにする（最終レビュー Important 4）
+    hideGlossPopup();
+    currentGlossDefs = {};
+    currentGlossTerms = [];
     if (overlayContainer) {
       if (overlayContainer._cleanup) overlayContainer._cleanup();
       overlayContainer.remove();
@@ -2362,9 +2607,11 @@ JSON配列のみ返してください:
     }
     const toggleBtn = document.getElementById('mut-btn-toggle');
     const clearBtn = document.getElementById('mut-btn-clear');
+    const modeBtn = document.getElementById('mut-btn-mode');
     const debugBtn = document.getElementById('mut-btn-debug');
     if (toggleBtn) toggleBtn.style.display = 'none';
     if (clearBtn) clearBtn.style.display = 'none';
+    if (modeBtn) modeBtn.style.display = 'none';
     if (debugBtn) debugBtn.style.display = 'none';
   }
 
@@ -2418,8 +2665,11 @@ JSON配列のみ返してください:
   // UI配置
   // ============================================================
   function getUIParent() {
-    // showModal()で開いたdialogはtop-layerを使うため、body配置のUIが隠れる
-    return document.querySelector('dialog[open]') || document.body;
+    // showModal()で開いたdialogはtop-layerを使うため、body配置のUIが隠れる。
+    // 条件は :modal に限る。dialog[open] だと、リーダーが開いたまま
+    // visibility:hidden で伏せている非モーダル dialog まで拾ってしまい、
+    // その配下に置いた UI が visibility を継承して不可視になる（実機で発生）
+    return document.querySelector('dialog:modal') || document.body;
   }
 
   // ============================================================

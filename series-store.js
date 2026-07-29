@@ -6,6 +6,7 @@ import { sanitizeGlossaryText, sanitizeToneStyle } from './utils/sanitize.js';
 import { derivePathPrefix } from './utils/url-pattern.js';
 import { sanitizeExample } from './utils/example-utils.js';
 import { sampleRecentPairs, mergeCandidates } from './utils/nano-extract.js';
+import { trimGlossDefs, GLOSSDEFS_SERIES_MAX_BYTES } from './utils/gloss-cache.js';
 
 // ============================================================
 // 容量閾値（§0 実測値に基づく確定値）
@@ -279,10 +280,11 @@ export async function acquireExtractionLock(seriesId) {
 
 /**
  * 抽出結果を適用する（マージ or 失敗記録）
- * @param {{ seriesId: string, candidates: Array<{original: string, translated: string}>, success: boolean }} param
+ * @param {{ seriesId: string, candidates: Array<{original: string, translated: string}>, success: boolean, consumedPairs?: number }} param
+ *   consumedPairs: 呼び出し側が実際に Nano に渡したペア数。省略時は recentPairs を全消去する
  * @returns {Promise<{ status: 'ok'|'locked'|'not-found', added?: number, glossaryLangMap?: object }>}
  */
-export async function applyExtractionResult({ seriesId, candidates, success }) {
+export async function applyExtractionResult({ seriesId, candidates, success, consumedPairs }) {
   return withSeriesLock(seriesId, async () => {
     const series = await getSeriesWithDefaults(seriesId);
     if (!series) return { status: 'not-found' };
@@ -317,8 +319,19 @@ export async function applyExtractionResult({ seriesId, candidates, success }) {
       ...glossary,
       [targetLang]: nextGlossaryLangMap,
     };
-    series.recentPairs = [];
-    series.extractionDue = false;
+    // 消費したぶんだけ先頭（＝古い側）から捨てる。全消去にすると、呼び出し側が
+    // ペア数上限（background.js の EXTRACTION_PAIRS_PER_RUN）で切って渡したとき、
+    // 渡していない新しい側のペアまで巻き添えで消える。
+    // consumedPairs 省略時は従来どおり全消去（ペア 0 件でロックだけ解放する経路など）。
+    const pairs = Array.isArray(series.recentPairs) ? series.recentPairs : [];
+    if (typeof consumedPairs === 'number' && consumedPairs >= 0) {
+      pairs.splice(0, consumedPairs);
+      series.recentPairs = pairs;
+    } else {
+      series.recentPairs = [];
+    }
+    // 積み残しが閾値以上あるなら次回の翻訳記録でもう一度走らせる
+    series.extractionDue = series.recentPairs.length >= EXTRACTION_THRESHOLD;
     series.extractionFailures = 0;
     series.extractionRunning = null;
     series.stats = {
@@ -551,4 +564,42 @@ export async function removeExample(seriesId, index) {
  */
 export async function getStorageUsageInfo() {
   return computeUsageInfo();
+}
+
+// ============================================================
+// Phase 7: 固有名詞解説キャッシュ（glossDefs）
+// ============================================================
+
+/**
+ * シリーズの解説キャッシュを言語別に取得する
+ * @param {string} seriesId
+ * @param {string} targetLang
+ * @returns {Promise<object>} 未登録は {}
+ */
+export async function getGlossDefs(seriesId, targetLang) {
+  const series = await getSeries(seriesId);
+  if (!series) return {};
+  const defs = series.glossDefs ?? {};
+  return defs[targetLang] ?? {};
+}
+
+/**
+ * シリーズの解説キャッシュを言語別に置き換える。16 KB を超える分は古い順に落とす。
+ * @param {string} seriesId
+ * @param {string} targetLang
+ * @param {object} entries
+ * @returns {Promise<boolean>} シリーズが存在しなければ false
+ */
+export async function putGlossDefs(seriesId, targetLang, entries) {
+  return withSeriesLock(seriesId, async () => {
+    const key = `series:${seriesId}`;
+    const stored = await chrome.storage.local.get(key);
+    const series = stored[key];
+    if (!series) return false;
+
+    const trimmed = trimGlossDefs(entries, GLOSSDEFS_SERIES_MAX_BYTES);
+    const glossDefs = { ...(series.glossDefs ?? {}), [targetLang]: trimmed };
+    await chrome.storage.local.set({ [key]: { ...series, glossDefs } });
+    return true;
+  });
 }

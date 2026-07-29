@@ -947,6 +947,61 @@ describe('applyExtractionResult - success', () => {
     expect(series.extractionDue).toBe(false);
   });
 
+  it('consumedPairs を渡すと古い側だけが消え、新しい側が残る', async () => {
+    const { applyExtractionResult, getSeries } = await loadStore();
+    const now = Date.now();
+    _store['series:ex002b'] = {
+      meta: { name: 'Test' },
+      glossary: {},
+      stats: {},
+      // p0（最古）〜 p49（最新）
+      recentPairs: Array.from({ length: 50 }, (_, i) => ({
+        original: `p${i}`, translated: `訳${i}`, at: now + i,
+      })),
+      extractionDue: true,
+      extractionRunning: { startedAt: now },
+      extractionFailures: 0,
+      rejectedOriginals: [],
+    };
+
+    await applyExtractionResult({
+      seriesId: 'ex002b', candidates: [], success: true, consumedPairs: 20,
+    });
+
+    const series = await getSeries('ex002b');
+    expect(series.recentPairs).toHaveLength(30);
+    // 残るのは新しい側（p20〜p49）。長さだけでは切る向きの誤りを検出できない
+    expect(series.recentPairs[0].original).toBe('p20');
+    expect(series.recentPairs[29].original).toBe('p49');
+    // 積み残しが閾値（20）以上あるので次回も走らせる
+    expect(series.extractionDue).toBe(true);
+  });
+
+  it('consumedPairs を渡しても失敗時は recentPairs を消費しない', async () => {
+    const { applyExtractionResult, getSeries } = await loadStore();
+    const now = Date.now();
+    _store['series:ex002c'] = {
+      meta: { name: 'Test' },
+      glossary: {},
+      stats: {},
+      recentPairs: Array.from({ length: 25 }, (_, i) => ({
+        original: `p${i}`, translated: `訳${i}`, at: now + i,
+      })),
+      extractionDue: true,
+      extractionRunning: { startedAt: now },
+      extractionFailures: 0,
+      rejectedOriginals: [],
+    };
+
+    await applyExtractionResult({
+      seriesId: 'ex002c', candidates: [], success: false, consumedPairs: 20,
+    });
+
+    const series = await getSeries('ex002c');
+    expect(series.recentPairs).toHaveLength(25);
+    expect(series.recentPairs[0].original).toBe('p0');
+  });
+
   it('成功時に stats が更新される', async () => {
     const { applyExtractionResult, getSeries } = await loadStore();
     _store['series:ex003'] = {
@@ -1127,5 +1182,58 @@ describe('addExample / removeExample (Phase 6)', () => {
     const r = await removeExample('ex5', 0);
     expect(r.examples).toHaveLength(1);
     expect(r.examples[0].original).toBe('C');
+  });
+});
+
+// ============================================================
+// glossDefs（Phase 7: 固有名詞解説キャッシュ）
+// ============================================================
+describe('glossDefs', () => {
+  // addGlossaryEntry のテストと同様、put 系 API は既存シリーズを前提とするため
+  // 事前にシリーズを 1 件用意する（既存の glossary も同居させ、破壊されないか検証できるようにする）
+  beforeEach(() => {
+    _store['series:s1'] = {
+      meta: { name: 'Test' },
+      glossary: {
+        ja: { Thor: { translated: 'ソー', count: 1, lastSeenAt: 0, source: 'manual', approved: true } },
+      },
+    };
+  });
+
+  it('未登録シリーズでは空オブジェクトを返す', async () => {
+    const { getGlossDefs } = await loadStore();
+    expect(await getGlossDefs('unknown-series', 'ja')).toEqual({});
+  });
+
+  it('保存した内容を言語別に読み戻せる', async () => {
+    const { getGlossDefs, putGlossDefs } = await loadStore();
+    await putGlossDefs('s1', 'ja', {
+      Hulk: { identity: 'A', powers: 'B。', url: 'https://x/', source: 'en-wikipedia', at: 1 },
+    });
+    const r = await getGlossDefs('s1', 'ja');
+    expect(r.Hulk.identity).toBe('A');
+    expect(await getGlossDefs('s1', 'en')).toEqual({});
+  });
+
+  it('既存の glossary を壊さない', async () => {
+    const { getSeries, putGlossDefs } = await loadStore();
+    await putGlossDefs('s1', 'ja', { Hulk: { identity: 'A', powers: 'B。', at: 1 } });
+    const series = await getSeries('s1');
+    expect(series.glossary).toBeDefined();
+    expect(series.glossary.ja.Thor.translated).toBe('ソー');
+  });
+
+  it('上限を超えた場合は古いものを落として保存する', async () => {
+    const { getGlossDefs, putGlossDefs } = await loadStore();
+    const many = {};
+    for (let i = 0; i < 200; i++) {
+      many[`T${i}`] = { identity: 'あ'.repeat(40), powers: 'い'.repeat(80), url: 'https://x/', source: 'en-wikipedia', at: i };
+    }
+    await putGlossDefs('s1', 'ja', many);
+    const r = await getGlossDefs('s1', 'ja');
+    const bytes = new TextEncoder().encode(JSON.stringify(r)).length;
+    expect(bytes).toBeLessThanOrEqual(16 * 1024);
+    expect(Object.keys(r).length).toBeLessThan(200);
+    expect(r).toHaveProperty('T199'); // 新しいものが残る
   });
 });

@@ -479,3 +479,25 @@ describe('buildExtractionPrompt - variants (Phase 6-B)', () => {
     expect(p).toContain('inconsistent');
   });
 });
+
+describe('sanitizeCandidate - 記号始まりの候補の除外（実機で Nano が返した台詞）', () => {
+  it('省略記号で始まる台詞を弾く', () => {
+    expect(sanitizeCandidate({ original: '... FORTEAN TO SHADOW BASE.', translated: 'こちらフォルティアン' })).toBeNull();
+  });
+
+  // 末尾ピリオドで弾くと実在の名前を巻き添えにするため、その判定は入れない
+  it('末尾ピリオドの実在の名前を落とさない', () => {
+    for (const [o, t] of [['Nick Fury Jr.', 'ニック・フューリー・ジュニア'],
+                          ['Mr. Fixit.', 'ミスター・フィックスイット'],
+                          ['S.H.I.E.L.D.', 'シールド']]) {
+      expect(sanitizeCandidate({ original: o, translated: t })).toEqual({ original: o, translated: t });
+    }
+  });
+
+  it('通常の固有名詞は通す', () => {
+    for (const [o, t] of [['Thunderbolt Ross', 'サンダーボルト・ロス'], ['Doc Green', 'ドック・グリーン'],
+                          ['Gamma Base', 'ガンマ基地'], ['Red Hulk', 'レッドハルク']]) {
+      expect(sanitizeCandidate({ original: o, translated: t })).toEqual({ original: o, translated: t });
+    }
+  });
+});

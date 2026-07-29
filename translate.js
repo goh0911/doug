@@ -184,7 +184,15 @@ async function fetchWithRetry(url, options, providerName) {
     const baseWait = res.status === 503 ? 3000 : 10000;
     const retryAfterSec = Math.min(parseInt(retryAfter, 10) || 0, 60); // 上限60秒
     const wait = retryAfterSec > 0 ? retryAfterSec * 1000 : (attempt + 1) * baseWait;
-    await new Promise(r => setTimeout(r, wait));
+    // 中断シグナルが渡されている場合はバックオフ待機も打ち切る（signalなしの場合は従来と同一動作）
+    await new Promise((resolve) => {
+      const timer = setTimeout(resolve, wait);
+      const signal = options && options.signal;
+      if (!signal) return;
+      if (signal.aborted) { clearTimeout(timer); resolve(); return; }
+      signal.addEventListener('abort', () => { clearTimeout(timer); resolve(); }, { once: true });
+    });
+    if (options && options.signal && options.signal.aborted) break;
   }
   // 3回リトライしても失敗の場合、明示的なメッセージで通知
   if (res.status === 429) {
@@ -398,5 +406,116 @@ async function translateImageWithOllama(endpoint, model, imageData, prompt, imag
   if (!content) throw new Error('Ollama から応答がありません');
 
   return parseVisionResponse(content, imageDims);
+}
+
+// ============================================================
+// Phase 7: テキスト専用のプロバイダ呼び出し（解説生成のフォールバック用）
+// 画像翻訳の経路（handleImageTranslation）とは独立させる（R-SEC-1a）
+// ============================================================
+
+// 解説生成のフォールバック呼び出し全体（設定取得〜応答受信）を打ち切るまでの上限
+// （レビュー Important 1: fetchWithRetry の 429/503 バックオフが無制限に伸びるのを防ぐ）
+const GLOSS_API_TIMEOUT_MS = 30_000;
+
+/**
+ * 設定済みプロバイダにテキストのみのプロンプトを投げ、生の応答文字列を返す。
+ * @param {string} prompt
+ * @returns {Promise<string|null>} 失敗時は null（例外を投げない）
+ */
+export async function callTextOnlyProvider(prompt) {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), GLOSS_API_TIMEOUT_MS);
+  try {
+    // getSettings() の失敗も「例外を投げない」契約に含める（try の外だった旧実装は JSDoc と矛盾）
+    const settings = await getSettings();
+    const provider = settings.apiProvider || 'gemini';
+
+    let apiKey = null;
+    if (provider !== 'ollama') {
+      apiKey = settings[PROVIDER_KEY_MAP[provider]];
+      if (!apiKey) return null;
+    }
+
+    if (provider === 'gemini') {
+      const model = settings.geminiModel || 'gemini-3.6-flash';
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`;
+      const res = await fetchWithRetry(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: prompt }] }],
+          generationConfig: { temperature: 0, maxOutputTokens: 512 },
+        }),
+        signal: controller.signal,
+      }, 'Gemini');
+      if (!res.ok) return null;
+      const data = await res.json();
+      return data.candidates?.[0]?.content?.parts?.[0]?.text ?? null;
+    }
+
+    if (provider === 'claude') {
+      const res = await fetchWithRetry('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': apiKey,
+          'anthropic-version': '2023-06-01',
+          // ブラウザ（拡張機能）オリジンからの直接呼び出しに必須（translateImageWithClaude と対称）
+          'anthropic-dangerous-direct-browser-access': 'true',
+        },
+        body: JSON.stringify({
+          model: settings.claudeModel || 'claude-sonnet-5',
+          max_tokens: 512,
+          messages: [{ role: 'user', content: [{ type: 'text', text: prompt }] }],
+        }),
+        signal: controller.signal,
+      }, 'Claude');
+      if (!res.ok) return null;
+      const data = await res.json();
+      return data.content?.[0]?.text ?? null;
+    }
+
+    if (provider === 'openai') {
+      const res = await fetchWithRetry('https://api.openai.com/v1/chat/completions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
+        body: JSON.stringify({
+          model: settings.openaiModel || 'gpt-5.6-sol',
+          // translateImageWithOpenAI と同じく max_tokens（max_completion_tokens ではない）
+          max_tokens: 512,
+          messages: [{ role: 'user', content: prompt }],
+        }),
+        signal: controller.signal,
+      }, 'ChatGPT');
+      if (!res.ok) return null;
+      const data = await res.json();
+      return data.choices?.[0]?.message?.content ?? null;
+    }
+
+    if (provider === 'ollama') {
+      const endpoint = settings.ollamaEndpoint || 'http://localhost:11434';
+      // http/https スキームのみ許可（SSRF 対策 — translateImageWithOllama / content.js:95 と対称）
+      if (!/^https?:\/\//i.test(endpoint)) return null;
+      // translateImageWithOllama と同じく /api/chat + messages 形式（/api/generate ではない）
+      const res = await fetchWithRetry(`${endpoint}/api/chat`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: settings.ollamaModel || 'qwen3.6:35b-a3b',
+          messages: [{ role: 'user', content: prompt }],
+          stream: false,
+        }),
+        signal: controller.signal,
+      }, 'Ollama');
+      if (!res.ok) return null;
+      const data = await res.json();
+      return data.message?.content ?? null;
+    }
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timeoutId);
+  }
+  return null;
 }
 

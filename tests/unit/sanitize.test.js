@@ -164,3 +164,34 @@ describe('sanitizeToneStyle', () => {
     expect(sanitizeToneStyle(null)).toBeNull();
   });
 });
+
+import { cleanControlChars, escapeDelimiters } from '../../utils/sanitize.js';
+
+describe('cleanControlChars（nano-extract から移設）', () => {
+  it('改行・タブ・行分離子を単一空白にする', () => {
+    expect(cleanControlChars('a\n\nb\tc d')).toBe('a b c d');
+  });
+
+  it('C0/C1 制御文字を除去する', () => {
+    expect(cleanControlChars('a\x00b\x1Fc\x7Fd\x9Fe')).toBe('abcde');
+  });
+
+  it('方向制御文字を除去する', () => {
+    expect(cleanControlChars('a‮b⁦c​d')).toBe('abcd');
+  });
+
+  it('タグ文字 U+E0000-U+E007F を除去する', () => {
+    expect(cleanControlChars('a\u{E0041}b')).toBe('ab');
+  });
+});
+
+describe('escapeDelimiters（nano-extract から移設）', () => {
+  it('プロンプト区切り記号を無害化する', () => {
+    expect(escapeDelimiters('<<<<BEGIN>>>>')).toBe('_BEGIN_');
+    expect(escapeDelimiters('[SYSTEM] x [DATA]')).toBe('_ x _');
+  });
+
+  it('区切り記号を含まない文字列はそのまま返す', () => {
+    expect(escapeDelimiters('普通の文章です')).toBe('普通の文章です');
+  });
+});

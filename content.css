@@ -291,32 +291,6 @@
   background: rgba(26, 26, 46, 1);
 }
 
-/* パネル再翻訳ボタン（overlayContainer内に絶対配置・mousemoveで表示制御） */
-.mut-panel-retranslate-btn {
-  position: absolute;
-  width: 26px;
-  height: 26px;
-  border-radius: 50%;
-  border: none;
-  background: rgba(26, 26, 46, 0.85);
-  color: #fff;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  opacity: 0;
-  transition: opacity 0.2s, background 0.15s;
-  pointer-events: none;
-  z-index: 2;
-}
-.mut-panel-retranslate-btn.mut-panel-btn-visible {
-  opacity: 1;
-  pointer-events: auto;
-}
-.mut-panel-retranslate-btn:hover {
-  background: rgba(26, 26, 46, 1);
-}
-
 /* v2 Phase 1: シリーズ検出インジケーター（デバッグ表示） */
 .mut-series-indicator {
   display: inline-flex;
@@ -337,7 +311,7 @@
   color: rgba(255, 255, 255, 0.35);
 }
 
-/* 吹き出し単体の再翻訳ボタン（オーバーレイホバー時のみ右上に表示） */
+/* 吹き出し単体の再翻訳ボタン（右上）。表示は再翻訳モードのときだけ */
 .mut-bubble-retranslate-btn {
   position: absolute;
   top: -8px;
@@ -366,3 +340,94 @@
   opacity: 1;
   background: rgba(26, 26, 46, 1);
 }
+
+/* 再翻訳ボタンは「再翻訳モード」のときだけ出す。
+   通常モードは読書のための表示（解説ポップアップ）に専念させる。
+   3 種類（ページ / パネル / 吹き出し）すべてが対象。
+   :hover や JS のクラス付与より確実に勝つよう display で止める */
+#mut-overlay-container:not(.mut-retranslate-mode) .mut-reload-btn,
+#mut-overlay-container:not(.mut-retranslate-mode) .mut-bubble-retranslate-btn {
+  display: none;
+}
+
+/* 再翻訳モード中は hover を待たず常時クリック可能にする。
+   このボタンは top/right -8px で吹き出しの外にはみ出しており、
+   .mut-overlay:hover を条件にすると、近づいた時点でポインタが
+   吹き出し矩形の外に出て pointer-events:none に戻り、クリックが
+   下の要素に抜けてしまう（実機で「押しても何も起きない」状態だった） */
+#mut-overlay-container.mut-retranslate-mode .mut-bubble-retranslate-btn {
+  opacity: 0.9;
+  pointer-events: auto;
+}
+
+/* 再翻訳中。API 往復で数秒かかるため、完了までアイコンを回して二度押しを防ぐ */
+#mut-overlay-container.mut-retranslate-mode .mut-bubble-retranslate-btn.mut-btn-spinning {
+  opacity: 1;
+  pointer-events: none;
+  cursor: default;
+}
+.mut-bubble-retranslate-btn.mut-btn-spinning svg {
+  animation: mut-spin 0.8s linear infinite;
+}
+
+/* 固有名詞解説（Phase 7） */
+/* .mut-overlay-text は display:flex のため、分割後の複数ノードを直接の子要素にすると
+   個々が flex item になり折り返しが崩れる。inner を単一の flex item にして、
+   .mut-overlay-text 本体と同じ折り返し規則をここで踏襲する */
+.doug-gloss-line {
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+
+.doug-gloss-term {
+  text-decoration: underline dotted currentColor;
+  text-underline-offset: 2px;
+  cursor: help;
+}
+
+.doug-gloss-term:focus-visible {
+  outline: 2px solid currentColor;
+  outline-offset: 1px;
+}
+
+.doug-gloss-popup {
+  /* overlayContainer と同じビューポート座標系に揃える（content.js 側で
+     getBoundingClientRect() をスクロールオフセット無しで使う。最終レビュー Important 2） */
+  position: fixed;
+  visibility: visible;
+  z-index: 999999;
+  max-width: 280px;
+  padding: 8px 10px;
+  background: #1e1e2e;
+  color: #e0e0e0;
+  border-radius: 8px;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.3);
+  font-size: 13px;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  line-height: 1.5;
+  pointer-events: auto;
+}
+
+/* サイト側が [role="tooltip"] を伏せる汎用 CSS を持っている場合に負けないようにする。
+   Marvel のリーダーで実測: ポップアップ自身が visibility:hidden / position:absolute /
+   z-index:100 を奪われていた（.doug-gloss-popup と [role="tooltip"] は詳細度が
+   同点(0,1,0)で、後から読み込まれるサイト側が勝つ）。
+   role="tooltip" は読み上げのために外せないので、id 詳細度 + !important で確実に勝つ。
+   表示に不可欠な 3 プロパティだけに限定する（見た目はサイト側に譲ってよい）。 */
+#doug-gloss-popup.doug-gloss-popup {
+  position: fixed !important;
+  visibility: visible !important;
+  z-index: 999999 !important;
+}
+
+.doug-gloss-identity { font-weight: 600; }
+.doug-gloss-powers   { margin-top: 2px; }
+
+.doug-gloss-cite {
+  margin-top: 6px;
+  font-size: 11px;
+  opacity: 0.75;
+}
+
+.doug-gloss-cite a { color: inherit; }

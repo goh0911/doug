@@ -2,6 +2,9 @@
 
 const $ = (id) => document.getElementById(id);
 
+// utils/wiki-source.js の WIKIPEDIA_ORIGIN と同一値（options.js は module ではないため直書き）
+const WIKIPEDIA_ORIGIN = 'https://en.wikipedia.org/*';
+
 let isPulling = false;
 
 async function loadWhitelistUI() {
@@ -235,6 +238,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     ollamaEndpoint: 'http://localhost:11434',
     prefetch: false,
     imagePreprocess: true,
+    glossEnabled: false,
+    glossEngine: 'auto',
   });
 
   $('apiProvider').value = settings.apiProvider;
@@ -248,6 +253,11 @@ document.addEventListener('DOMContentLoaded', async () => {
   $('ollamaEndpoint').value = settings.ollamaEndpoint;
   $('prefetch').checked = settings.prefetch;
   $('imagePreprocess').checked = settings.imagePreprocess;
+  // 保存値だけでなく実際の権限保有も突き合わせる（chrome://extensions から後で剥奪されている場合に
+  // チェックが入ったまま表示されてしまう「嘘」を防ぐ。background.js:688/:707 と同じパターン）
+  const glossHasPermission = await chrome.permissions.contains({ origins: [WIKIPEDIA_ORIGIN] }).catch(() => false);
+  $('glossEnabled').checked = settings.glossEnabled && glossHasPermission;
+  $('glossEngine').value = settings.glossEngine;
 
   updateProviderUI(settings.apiProvider);
 
@@ -276,6 +286,39 @@ document.addEventListener('DOMContentLoaded', async () => {
     await chrome.storage.local.set({ apiStats: { lastReset: Date.now() } });
     await loadApiStats();
     showStatus('API使用回数をリセットしました', 'ok');
+  });
+
+  // 固有名詞解説ポップアップ: 有効化時に en.wikipedia.org のホスト権限を要求する
+  $('glossEnabled').addEventListener('change', async () => {
+    const el = $('glossEnabled');
+    if (!el.checked) {
+      // OFF は権限操作を伴わないため即座に保存
+      await chrome.storage.local.set({ glossEnabled: false });
+      return;
+    }
+    // ユーザー操作の直後でなければ権限ダイアログが失敗するため、await を挟まず直接呼ぶ
+    let granted = false;
+    try {
+      granted = await chrome.permissions.request({ origins: [WIKIPEDIA_ORIGIN] });
+    } catch (err) {
+      el.checked = false;
+      await chrome.storage.local.set({ glossEnabled: false });
+      showStatus('権限の取得に失敗しました: ' + err.message, 'err');
+      return;
+    }
+    if (!granted) {
+      el.checked = false;
+      await chrome.storage.local.set({ glossEnabled: false });
+      showStatus('en.wikipedia.org へのアクセスが許可されなかったため、機能は無効のままです', 'err');
+      return;
+    }
+    await chrome.storage.local.set({ glossEnabled: true });
+    showStatus('解説ポップアップを有効にしました', 'ok');
+  });
+
+  // 生成エンジンの切り替えは即座に保存
+  $('glossEngine').addEventListener('change', async () => {
+    await chrome.storage.local.set({ glossEngine: $('glossEngine').value });
   });
 
   // シリーズ管理を開く
