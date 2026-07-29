@@ -121,18 +121,22 @@ UI は実機の指摘を受けて次のとおり変更しました。
 
 ---
 
-## 6. 本ブランチ外の既存問題
+## 6. 既存 E2E テストの修正（2026-07-29 対応済み）
 
-**既存の E2E テストは通り得ない状態にあります。** `translation.spec.js` / `auto-translate.spec.js` / `whitelist.spec.js` が待っているセレクタが content.js に存在しません。
+`translation.spec.js` / `auto-translate.spec.js` / `whitelist.spec.js` は、存在しないセレクタを待っており通り得ない状態でした。
 
-| テストのセレクタ | 実体 |
+| 修正前 | 修正後 |
 |---|---|
-| `#doug-toolbar` | `#mut-toolbar`（content.js:393） |
-| `#doug-overlay-container` | `#mut-overlay-container`（content.js:2304） |
-| `.doug-overlay` | `.mut-overlay`（content.js:2057, 2374） |
+| `#doug-toolbar` | `#mut-toolbar` |
+| `#doug-overlay-container` | `#mut-overlay-container` |
+| `.doug-overlay` | `.mut-overlay` |
 
-加えて `toHaveCount({ minimum: 1 })` は Playwright の不正な API（数値を取る仕様）。
+セレクタ以外にも 3 点あり、あわせて直しています。
 
-`.github/workflows/` は `publish.yml` のみで **E2E を CI で回していない**ため露見していませんでした。`CLAUDE.md` の「新機能追加時のチェックリスト」も同じ誤ったセレクタを記載しています（`CLAUDE.md` は `.gitignore:7` で除外されているためコミット対象外）。
+- `toHaveCount({ minimum: 1 })` は Playwright の不正な API（数値しか取らない）→ `.first()` の存在確認に置換
+- 自動翻訳トグルを `getByRole('checkbox')` で取っていたが、実体は `<button id="mut-btn-auto">`。ON/OFF も `.mut-btn-active` クラスで表される → id と class で判定
+- 翻訳ボタンを `getByRole('button', { name: /翻訳/ })` で取っていたが、`title` に「翻訳」を含むボタンが複数あり strict mode に触れる → `#mut-btn-translate` で取得
 
-本ブランチでは新規 `gloss-popup.spec.js` だけを実在するセレクタに直し、既存 spec には触れていません。
+`.github/workflows/` は `publish.yml` のみで **E2E を CI で回していない**ため露見していませんでした。
+
+**修正後の実行は未実施です。** このスイートは実ブラウザで実際に翻訳を走らせるため、ユーザーの Chrome プロファイルと有料 API を消費します。静的検証（`npx playwright test --list` で 7 テスト 4 ファイルを収集）までは確認済みです。

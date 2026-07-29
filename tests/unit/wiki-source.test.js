@@ -146,6 +146,22 @@ describe('termAppearsIn', () => {
     expect(termAppearsIn('GAMMA BASE', 'Betty Ross', intro)).toBe(false);
   });
 
+  it('記号を落とすと一般名詞に化ける語は元表記で照合する（リリース前レビュー指摘）', () => {
+    // S.H.I.E.L.D. を shield に正規化して導入節と照合すると、盾の記述に一致してしまう
+    const capAm = 'Captain America is a superhero appearing in American comic books. '
+      + 'He uses a nearly indestructible shield.';
+    expect(termAppearsIn('S.H.I.E.L.D.', 'Captain America', capAm)).toBe(false);
+
+    const shield = 'S.H.I.E.L.D. is a fictional espionage agency appearing in American comic books.';
+    expect(termAppearsIn('S.H.I.E.L.D.', 'S.H.I.E.L.D.', shield)).toBe(true);
+  });
+
+  it('ハイフンを含む語も元表記で導入節と照合する', () => {
+    const spidey = 'Peter Parker, also known as Spider-Man, is a superhero in American comic books.';
+    expect(termAppearsIn('SPIDER-MAN', 'Peter Parker', spidey)).toBe(true);
+    expect(termAppearsIn('SPIDER-MAN', 'Peter Parker', 'Peter Parker is a photographer.')).toBe(false);
+  });
+
   it('空の語は照合しない', () => {
     expect(termAppearsIn('', 'Anything', 'anything')).toBe(false);
     expect(termAppearsIn(null, 'Anything', 'anything')).toBe(false);

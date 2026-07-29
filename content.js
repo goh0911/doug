@@ -7,6 +7,24 @@
   if (window.__dougInitialized) return;
   window.__dougInitialized = true;
 
+  // SITE_DISABLED でこの IIFE インスタンスを畳むための解体処理。
+  // __dougInitialized を false に戻すだけだと、再有効化のたびに新しいインスタンスが
+  // 注入され、document レベルのリスナーが積み上がる（リリース前レビュー Important）
+  const teardownFns = [];
+  function onTeardown(fn) { teardownFns.push(fn); }
+  function runTeardown() {
+    while (teardownFns.length > 0) {
+      const fn = teardownFns.pop();
+      try { fn(); } catch { /* 解体の失敗で残りを止めない */ }
+    }
+  }
+
+  /** document へのリスナー登録と解体登録をまとめる */
+  function addDocumentListener(type, handler, options) {
+    document.addEventListener(type, handler, options);
+    onTeardown(() => document.removeEventListener(type, handler, options));
+  }
+
   let isTranslating = false;
   let overlayContainer = null;
   let toolbar = null;
@@ -29,7 +47,6 @@
   const BBOX_STABLE_STEPS      = 30;   // 安定判定ウィンドウ数
   const BBOX_STABLE_GROWTH_MAX = 0.01; // bbox面積増加率の安定閾値（1%）
   /* eslint-disable-next-line no-unused-vars */
-  const PANEL_CROP_PADDING     = 0.07; // crop時のパディング率（フェーズ4で使用）
   const BUBBLE_CROP_PADDING    = 0.15; // 吹き出し単体crop時のパディング率（個別再翻訳）
   const SEED_SAMPLE_SIZE       = 5;    // 起点サンプル固定サイズ（5×5）
   const STABLE_CHECK_INTERVAL  = 100;  // 安定判定チェック間隔（ピクセル数、大パネルの早期終了防止で50→100）
@@ -1764,40 +1781,6 @@ JSON配列のみ返してください:
   // フェーズ4: パネル crop / 座標変換 / マージ / 再翻訳
   // ============================================================
 
-  // パネル bbox を PANEL_CROP_PADDING 分拡張して canvas で crop する（非同期）
-  // img.onload を待ってから drawImage する必要があるため Promise を返す
-  // 返値: Promise<{ dataUrl: string, cropBox: {x1,y1,x2,y2} } | null>
-  function cropPanelImage(imageDataUrl, group, W, H) {
-    return new Promise((resolve) => {
-      if (!imageDataUrl || !group || !group.unionBboxPx) { resolve(null); return; }
-      const { x1, y1, x2, y2 } = group.unionBboxPx;
-      const panelW = x2 - x1;
-      const panelH = y2 - y1;
-      const padX = panelW * PANEL_CROP_PADDING;
-      const padY = panelH * PANEL_CROP_PADDING;
-      const cropX1 = Math.max(0, Math.round(x1 - padX));
-      const cropY1 = Math.max(0, Math.round(y1 - padY));
-      const cropX2 = Math.min(W, Math.round(x2 + padX));
-      const cropY2 = Math.min(H, Math.round(y2 + padY));
-      const cropW  = cropX2 - cropX1;
-      const cropH  = cropY2 - cropY1;
-      if (cropW <= 0 || cropH <= 0) { resolve(null); return; }
-
-      const img = new Image();
-      img.onload = () => {
-        try {
-          const canvas = document.createElement('canvas');
-          canvas.width  = cropW;
-          canvas.height = cropH;
-          canvas.getContext('2d').drawImage(img, cropX1, cropY1, cropW, cropH, 0, 0, cropW, cropH);
-          resolve({ dataUrl: canvas.toDataURL('image/jpeg', 0.92), cropBox: { x1: cropX1, y1: cropY1, x2: cropX2, y2: cropY2 } });
-        } catch { resolve(null); }
-      };
-      img.onerror = () => resolve(null);
-      img.src = imageDataUrl;
-    });
-  }
-
   // transformBboxToFullPage — utils/panel-utils.js と同一内容（IIFE制約のためコピー）
   // utils/panel-utils.js 側を変更した場合はこちらも必ず同期すること
   function transformBboxToFullPage(cropBbox, cropBox, W, H) {
@@ -1998,7 +1981,7 @@ JSON配列のみ返してください:
     glossPopupSpanEl = spanEl;
   }
 
-  document.addEventListener('mouseover', (e) => {
+  addDocumentListener('mouseover', (e) => {
     try {
       const span = e.target.closest && e.target.closest('.doug-gloss-term');
       if (!span) return;
@@ -2008,25 +1991,25 @@ JSON配列のみ返してください:
     } catch { /* 表示に失敗しても翻訳表示には影響させない */ }
   });
 
-  document.addEventListener('mouseout', (e) => {
+  addDocumentListener('mouseout', (e) => {
     try {
       const span = e.target.closest && e.target.closest('.doug-gloss-term');
       if (span) hideGlossPopup();
     } catch { /* 表示に失敗しても翻訳表示には影響させない */ }
   });
 
-  document.addEventListener('focusin', (e) => {
+  addDocumentListener('focusin', (e) => {
     try {
       const span = e.target.closest && e.target.closest('.doug-gloss-term');
       if (span) showGlossPopup(span);
     } catch { /* 表示に失敗しても翻訳表示には影響させない */ }
   });
 
-  document.addEventListener('focusout', () => {
+  addDocumentListener('focusout', () => {
     try { hideGlossPopup(); } catch { /* noop */ }
   });
 
-  document.addEventListener('keydown', (e) => {
+  addDocumentListener('keydown', (e) => {
     try {
       if (e.key === 'Escape') hideGlossPopup();
     } catch { /* noop */ }
@@ -2825,6 +2808,9 @@ JSON配列のみ返してください:
       if (bar) bar.remove();
       const notif = document.getElementById('mut-notification');
       if (notif) notif.remove();
+      // document へのリスナーを外してからフラグを戻す。順序が逆でも動くが、
+      // 外し忘れると再注入のたびにリスナーが積み上がる
+      runTeardown();
       // 再有効化時に再注入できるようフラグをリセット
       window.__dougInitialized = false;
       return;

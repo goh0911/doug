@@ -66,13 +66,20 @@ export function cleanControlChars(s) {
 
 /**
  * 区切り記号をエスケープする（インジェクション対策）
+ *
+ * 大小文字を区別しない。完全一致で潰していた頃は `[system]` や `[Data]` が
+ * そのまま素通りし、第三者が編集できる Wikipedia 本文からプロンプトの
+ * ブロック境界を偽装できた（v2.0.0 リリース前レビューで指摘）。
+ * 角括弧の中の空白も許容する（`[ SYSTEM ]` 等）。
+ *
  * @param {string} s
  * @returns {string}
  */
 export function escapeDelimiters(s) {
-  s = s.split('<<<<').join('_');
-  s = s.split('>>>>').join('_');
-  s = s.split('[SYSTEM]').join('_');
-  s = s.split('[DATA]').join('_');
-  return s;
+  return String(s ?? '')
+    .split('<<<<').join('_')
+    .split('>>>>').join('_')
+    .replace(/\[\s*(SYSTEM|DATA|ENTRY)\s*\]/gi, '_')
+    // <system> ... </system> のような別記法も同様に潰す
+    .replace(/<\/?\s*(SYSTEM|DATA|ENTRY)\s*>/gi, '_');
 }

@@ -11,8 +11,8 @@ export const POWERS_MAX = 120;
 const INTRO_INPUT_MAX = 600;
 const POWERS_INPUT_MAX = 1500;
 
-/** 文末とみなす記号 */
-const SENTENCE_END = ['。', '．', '！', '？', '.', '!', '?'];
+/** 文末とみなす記号のうち、略語と紛れないもの（半角ピリオドは別扱い） */
+const UNAMBIGUOUS_SENTENCE_END = ['。', '．', '！', '？', '!', '?'];
 
 /** フィールドの最小文字数（R-W13）。極端に短い抽出結果はポップアップを出さない */
 const FIELD_MIN_LENGTH = 2;
@@ -73,12 +73,31 @@ export function truncateAtSentence(text, max) {
   if (typeof text !== 'string') return '';
   if (text.length <= max) return text;
   const head = text.slice(0, max);
-  let idx = -1;
-  for (const mark of SENTENCE_END) {
-    const at = head.lastIndexOf(mark);
-    if (at > idx) idx = at;
+
+  // 半角ピリオドは英略語（S.H.I.E.L.D. / Nick Fury Jr. / Mr.）にも現れるため、
+  // 文末記号として当てにできない。出力は langLabel の言語（既定は日本語）なので、
+  // 曖昧さの無い記号を先に探し、見つからないときだけピリオドを見る。
+  // これをしないと「…である。S.H.I.E.L.D.」のように文の途中で切れる（R-W16 違反）
+  let idx = lastIndexOfAny(head, UNAMBIGUOUS_SENTENCE_END);
+  if (idx < 0) {
+    let at = head.lastIndexOf('.');
+    // 数字の桁区切りや略語の内部（直後が英数字）は文末とみなさない
+    while (at > 0 && /[A-Za-z0-9]/.test(head.charAt(at + 1))) {
+      at = head.lastIndexOf('.', at - 1);
+    }
+    idx = at;
   }
   return idx >= 0 ? head.slice(0, idx + 1) : '';
+}
+
+/** 与えられた記号のうち、最も後ろに現れる位置。無ければ -1 */
+function lastIndexOfAny(s, marks) {
+  let idx = -1;
+  for (const mark of marks) {
+    const at = s.lastIndexOf(mark);
+    if (at > idx) idx = at;
+  }
+  return idx;
 }
 
 /**
