@@ -360,6 +360,16 @@
   pointer-events: auto;
 }
 
+/* 再翻訳中。API 往復で数秒かかるため、完了までアイコンを回して二度押しを防ぐ */
+#mut-overlay-container.mut-retranslate-mode .mut-bubble-retranslate-btn.mut-btn-spinning {
+  opacity: 1;
+  pointer-events: none;
+  cursor: default;
+}
+.mut-bubble-retranslate-btn.mut-btn-spinning svg {
+  animation: mut-spin 0.8s linear infinite;
+}
+
 /* 固有名詞解説（Phase 7） */
 /* .mut-overlay-text は display:flex のため、分割後の複数ノードを直接の子要素にすると
    個々が flex item になり折り返しが崩れる。inner を単一の flex item にして、

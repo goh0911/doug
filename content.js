@@ -2236,9 +2236,17 @@ JSON配列のみ返してください:
       '</svg>');
     // ドラッグ起動を抑止（overlay の mousedown ハンドラに到達させない）
     btn.addEventListener('mousedown', (e) => e.stopPropagation());
-    btn.addEventListener('click', (e) => {
+    btn.addEventListener('click', async (e) => {
       e.stopPropagation();
-      retranslateBubble(origIndex);
+      // 再翻訳は API 往復で数秒かかる。押した手応えが無いと二度押しされるため、
+      // 完了までアイコンを回す（retranslateBubble は内部で例外を握るが、
+      // 念のため finally で必ず戻す）
+      btn.classList.add('mut-btn-spinning');
+      try {
+        await retranslateBubble(origIndex);
+      } finally {
+        btn.classList.remove('mut-btn-spinning');
+      }
     });
     return btn;
   }
