@@ -25,6 +25,18 @@
     onTeardown(() => document.removeEventListener(type, handler, options));
   }
 
+  /** window へのリスナー登録と解体登録をまとめる */
+  function addWindowListener(type, handler, options) {
+    window.addEventListener(type, handler, options);
+    onTeardown(() => window.removeEventListener(type, handler, options));
+  }
+
+  /** Observer を解体対象に登録して返す */
+  function trackObserver(observer) {
+    onTeardown(() => { try { observer.disconnect(); } catch { /* 既に切れていれば無視 */ } });
+    return observer;
+  }
+
   let isTranslating = false;
   let overlayContainer = null;
   let toolbar = null;
@@ -595,7 +607,6 @@ JSON配列のみ返してください:
     };
     try {
       seriesInfo = await chrome.runtime.sendMessage({ type: 'DETECT_SERIES', payload });
-      console.log('[doug] Series detected:', seriesInfo);
       updateSeriesIndicator(seriesInfo);
 
       // Phase 5: Regex/URL で検出できなければ Nano fallback（後追いでインジケーターを上書き）
@@ -603,7 +614,6 @@ JSON配列のみ返してください:
         const nanoResult = await chrome.runtime.sendMessage({ type: 'DETECT_SERIES_NANO', payload });
         if (nanoResult) {
           seriesInfo = nanoResult;
-          console.log('[doug] Series detected via Nano:', seriesInfo);
           updateSeriesIndicator(seriesInfo);
         }
       }
@@ -964,7 +974,7 @@ JSON配列のみ返してください:
       // パネル単位の再翻訳ボタンは廃止し、再翻訳は吹き出し単位に一本化した
       computePanelGroups(imageData, response.translations).then(pg => {
         _lastPanelGroups = pg;
-      }).catch((err) => { console.log('[doug] computePanelGroups error:', err); });
+      }).catch((err) => { console.debug('[doug] パネル分割に失敗（bbox デバッグ表示のみに影響）:', err); });
 
       // v2 Phase 2A: 翻訳成功時にシリーズを記録（seriesInfo が検出済みの場合のみ）
       if (seriesInfo && seriesInfo.seriesId) {
@@ -1034,6 +1044,7 @@ JSON配列のみ返してください:
     }
   });
   perfObserver.observe({ type: 'resource', buffered: true });
+  trackObserver(perfObserver);
 
   function getComicPageUrls() {
     return Array.from(comicPageUrls.values());
@@ -1826,7 +1837,14 @@ JSON配列のみ返してください:
     return union <= 0 ? 0 : inter / union;
   }
 
-  // 解説の生成結果（原語 → { identity, powers, url }）と、
+  // 解説ソースの表示情報。background.js の GLOSS_SOURCES（utils/wiki-source.js の
+  // SOURCE_ID）と対応させる。ソースを増やすときはここに 1 行足す。
+  // content.js は Classic Script で import できないため、この対応表だけは複製する
+  const GLOSS_SOURCES = {
+    'en-wikipedia': { host: 'en.wikipedia.org', label: 'Wikipedia (CC BY-SA)' },
+  };
+
+  // 解説の生成結果（原語 → { identity, powers, url, source }）と、
   // 訳文の分割に使う { match: 訳語, key: 原語 } のリスト
   let currentGlossDefs = {};
   let currentGlossTerms = [];
@@ -1910,7 +1928,7 @@ JSON配列のみ返してください:
     // 150ms の遅延中に renderTranslatedText の再描画で span が差し替えられている場合、
     // getBoundingClientRect() が全ゼロを返しポップアップが左上に取り残されるため何もしない
     if (!spanEl.isConnected) {
-      console.info('[gloss] ポップアップ中止: span が DOM から外れている');
+      console.debug('[gloss] ポップアップ中止: span が DOM から外れている');
       return;
     }
     const key = spanEl.dataset.glossKey;
@@ -1919,7 +1937,7 @@ JSON配列のみ返してください:
       // 下線は出るのにポップアップが出ない、を無言にしないための記録。
       // span は currentGlossDefs から作られるので、ここに来るのは
       // 解説が後から破棄された（clearOverlays 等）ときに限られるはず
-      console.info('[gloss] ポップアップ中止: 解説なし key=', key,
+      console.debug('[gloss] ポップアップ中止: 解説なし key=', key,
         '保持数=', Object.keys(currentGlossDefs).length);
       return;
     }
@@ -1943,25 +1961,29 @@ JSON配列のみ返してください:
       popup.appendChild(line);
     }
 
-    // 出典と帰属表示（CC BY-SA。設計書 §7.2）
+    // 出典と帰属表示（CC BY-SA。設計書 §7.2）。
+    // ホスト名とラベルは def.source から引く。直書きすると 2 つ目のソースを
+    // 足したときに Wikipedia の表記のまま別ソースの解説を出してしまう
     const cite = document.createElement('div');
     cite.className = 'doug-gloss-cite';
+    const src = GLOSS_SOURCES[def.source] || null;
     let safeHref = null;
     try {
       const u = new URL(def.url);
-      // 生成元 origin 以外を踏ませない
-      if (u.protocol === 'https:' && u.hostname === 'en.wikipedia.org') safeHref = u.href;
+      // 生成元 origin 以外を踏ませない。未知の source はリンクにしない
+      if (src && u.protocol === 'https:' && u.hostname === src.host) safeHref = u.href;
     } catch { /* 不正 URL はリンクにしない */ }
 
+    const citeText = `出典: ${src ? src.label : '不明なソース'}`;
     if (safeHref) {
       const a = document.createElement('a');
       a.href = safeHref;
       a.target = '_blank';
       a.rel = 'noopener noreferrer';
-      a.textContent = '出典: Wikipedia (CC BY-SA)';
+      a.textContent = citeText;
       cite.appendChild(a);
     } else {
-      cite.textContent = '出典: Wikipedia (CC BY-SA)';
+      cite.textContent = citeText;
     }
     popup.appendChild(cite);
 
@@ -2666,8 +2688,8 @@ JSON配列のみ返してください:
       lastQueueKey = '';
       if (autoTranslate) scheduleAutoTranslate();
     };
-    window.addEventListener('popstate', onUrlChange);
-    window.addEventListener('hashchange', onUrlChange);
+    addWindowListener('popstate', onUrlChange);
+    addWindowListener('hashchange', onUrlChange);
 
     // Blob URL img / SVG image 要素の新規追加を監視
     // ※ Kindleはページをめくるたびに新しいBlob URL imgを3〜4件DOM追加する
@@ -2700,6 +2722,7 @@ JSON配列のみ返してください:
       }
     });
     bodyObserver.observe(document.body, { childList: true, subtree: true });
+    trackObserver(bodyObserver);
 
     // SVG image要素のhref変化を監視（Marvel等でのSPA内ページ遷移に対応）
     // ※ MutationObserver の attributeFilter は xlink:href を直接監視できないブラウザもあるため
@@ -2720,6 +2743,7 @@ JSON配列のみ返してください:
       attributes: true,
       attributeFilter: ['href', 'xlink:href'],
     });
+    trackObserver(svgObserver);
 
     // 通常img要素のsrc変化を監視（ComicBookPlus等のimg.src直接書き換えに対応）
     // ※ turnpage() は document.getElementById("maincomic").src を直接書き換えてページ遷移する
@@ -2744,6 +2768,7 @@ JSON配列のみ返してください:
       attributes: true,
       attributeFilter: ['src'],
     });
+    trackObserver(imgSrcObserver);
 
     // dialog[open]の変化を監視してtoolbarを適切な親に移動
     // ※ showModal()で開いたdialogはtop-layerを使うためbody配置のUIが隠れる
@@ -2760,6 +2785,7 @@ JSON配列のみ返してください:
       attributes: true,
       attributeFilter: ['open'],
     });
+    trackObserver(dialogWatcher);
   }
 
   // ============================================================

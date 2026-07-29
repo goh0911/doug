@@ -276,7 +276,8 @@ async function runExtractionBg(seriesId) {
       // 「固有名詞が無かった」のか「出力が破綻した」のか永久に区別できない。
       // 実機で 15 ペア 37 秒・0 件という不可解な結果に当たったので常時ログにする
       const raw = String(responseText ?? '');
-      console.info(
+      // 既定では見えない debug に置く（0 件のときだけ下の warn で目立たせる）
+      console.debug(
         '[gloss] 用語抽出:', `${sanitizedPairs.length}ペア`, `${elapsed}ms`,
         `応答${raw.length}字`, `候補${candidates.length}件`
       );
@@ -558,7 +559,9 @@ async function resolveGlossDefs({ seriesId, seriesName, terms, targetLang, langL
       for (const term of wanted) {
         const e = cached[term];
         if (!e || e.failed === true) continue;
-        out[term] = { identity: e.identity, powers: e.powers, url: e.url };
+        // source を落とさない。落とすと content.js 側が出典ホスト名とラベルを
+        // 直書きするしかなくなり、設計書 §3 の「ソースを 1 つ足すだけ」が成り立たない
+        out[term] = { identity: e.identity, powers: e.powers, url: e.url, source: e.source };
       }
       return out;
     } catch {

@@ -117,7 +117,7 @@ UI は実機の指摘を受けて次のとおり変更しました。
 - 2 回目の翻訳時に一瞬 gloss 無しで描画される
 
 **拡張性**
-- `source` フィールドが background→content の seam で落ちており、`content.js` が Wikipedia のホスト名とラベルをハードコードしている。**設計 §3 の「ソースを 1 つ足すだけ」は現状そのままでは成り立たない**
+- ~~`source` フィールドが background→content の seam で落ちている~~ → 2026-07-29 対応。`GET_GLOSS_DEFS` の応答に `source` を含め、`content.js` は `GLOSS_SOURCES` 対応表からホスト名とラベルを引く。ソース追加時は background の `GLOSS_SOURCES` 配列と content.js の対応表に 1 行ずつ足す
 
 ---
 
