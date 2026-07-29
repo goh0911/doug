@@ -261,8 +261,21 @@ async function runExtractionBg(seriesId) {
         expectedInputs: [{ type: 'text', languages: ['en', 'ja'] }],
         expectedOutputs: [{ type: 'text', languages: ['ja', 'en'] }],
       });
+      const startedAt = Date.now();
       const responseText = await session.prompt(prompt, { signal: controller.signal });
+      const elapsed = Date.now() - startedAt;
       candidates = parseCandidatesJson(responseText);
+      // 「候補 0 件」は AbortError と違って例外にならないため、記録しないと
+      // 「固有名詞が無かった」のか「出力が破綻した」のか永久に区別できない。
+      // 実機で 15 ペア 37 秒・0 件という不可解な結果に当たったので常時ログにする
+      const raw = String(responseText ?? '');
+      console.info(
+        '[gloss] 用語抽出:', `${sanitizedPairs.length}ペア`, `${elapsed}ms`,
+        `応答${raw.length}字`, `候補${candidates.length}件`
+      );
+      if (candidates.length === 0) {
+        console.warn('[gloss] 候補 0 件。Nano の生応答(先頭800字):', raw.slice(0, 800));
+      }
       success = true;
     } catch (err) {
       // 握り潰すと原因が一切追えなくなる（実機でこれに嵌った）。失敗理由は残す
