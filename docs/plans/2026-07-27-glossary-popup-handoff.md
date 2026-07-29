@@ -106,7 +106,6 @@ UI は実機の指摘を受けて次のとおり変更しました。
 
 **コード品質**
 - `getSeries` を 1 回の解決で最大 3 回読んでいる
-- `glossUserAgent` の連絡先が placeholder（`https://github.com/`）— **公開前に実リポジトリ URL へ置換すべき**
 - 両メッセージハンドラが `WIKIPEDIA_ORIGIN` をハードコード（2 つ目のソース追加時に破綻する）
 - `glossEngine` / `getSettings` を語ごとに読んでいる
 - `putGlossDefs` に容量ガードが無い（他の series 書き込みは持っている）

@@ -314,7 +314,7 @@ const glossInFlight = new Map();
 /** Api-User-Agent を組み立てる（User-Agent は Fetch の禁止ヘッダで送れない・R-W1） */
 function glossUserAgent() {
   const v = chrome.runtime.getManifest().version;
-  return `Doug-Comic-Translator/${v} (https://github.com/; chrome-extension)`;
+  return `Doug-Comic-Translator/${v} (https://github.com/goh0911/doug; chrome-extension)`;
 }
 
 /** 検索クエリ 1 本を実行し、ゲートを通れば素材を返す。通らなければ null */
