@@ -740,9 +740,9 @@ describe('recordSeriesTranslation - pairs 追加', () => {
     expect(series.recentPairs).toHaveLength(0);
   });
 
-  it('1 ページ 10 ペアでも 5 件にサンプリングされる', async () => {
+  it('1 ページ 25 ペアでも 10 件にサンプリングされる', async () => {
     const { recordSeriesTranslation, getSeries } = await loadStore();
-    const pairs = Array.from({ length: 10 }, (_, i) => ({
+    const pairs = Array.from({ length: 25 }, (_, i) => ({
       original: 'x'.repeat(i + 1),
       translated: 'y',
     }));
@@ -754,7 +754,32 @@ describe('recordSeriesTranslation - pairs 追加', () => {
       pairs,
     });
     const series = await getSeries('p4003');
-    expect(series.recentPairs.length).toBeLessThanOrEqual(5);
+    expect(series.recentPairs.length).toBe(10);
+  });
+
+  it('カタカナを含む訳文のペアが優先して記録される', async () => {
+    const { recordSeriesTranslation, getSeries } = await loadStore();
+    // 長い一般文 12 件（カタカナなし）＋ 短い固有名詞 2 件
+    const pairs = [
+      ...Array.from({ length: 12 }, (_, i) => ({
+        original: 'LONG SENTENCE '.repeat(5) + i,
+        translated: '長い一般的な説明の文です',
+      })),
+      { original: 'RED HULK', translated: 'レッドハルク' },
+      { original: 'TONY STARK', translated: 'トニー・スターク' },
+    ];
+    await recordSeriesTranslation({
+      seriesId: 'p4004',
+      name: 'Test',
+      detectionSource: 'regex',
+      url: 'https://example.com/comic/1',
+      pairs,
+    });
+    const series = await getSeries('p4004');
+    const originals = series.recentPairs.map((p) => p.original);
+    // 長さで切っていた頃はこの 2 件が真っ先に落ちていた
+    expect(originals).toContain('RED HULK');
+    expect(originals).toContain('TONY STARK');
   });
 
   it('50 件超で古い順に消える', async () => {

@@ -53,6 +53,11 @@ export async function handleImageTranslation(imageData, imageUrl, imageDims, opt
     } catch { /* フォールバック: 層A/Bなし */ }
   }
 
+  // 用語抽出に渡すペア（original/translated の組、層B 適用前の raw）
+  const toPairs = (items) => (Array.isArray(items) ? items : [])
+    .map((t) => ({ original: t.original, translated: t.translated }))
+    .filter((p) => p.original && p.translated);
+
   // 層B適用ヘルパ
   const applyLayerB = (translations) => {
     if (!glossaryLangMap) return { translations, glossaryHits: 0 };
@@ -65,7 +70,14 @@ export async function handleImageTranslation(imageData, imageUrl, imageDims, opt
     const cached = await getCachedTranslation(cacheKey, settings.targetLang, provider, activeModel);
     if (cached) {
       const r = applyLayerB(cached);
-      return { translations: r.translations, fromCache: true, glossaryHits: r.glossaryHits };
+      // キャッシュヒットでも pairs を返す。返さないと、一度読んだページを読み直しても
+      // 用語抽出の材料が一切増えず、用語集が育たない（実機で recentPairs が枯れていた）
+      return {
+        translations: r.translations,
+        fromCache: true,
+        glossaryHits: r.glossaryHits,
+        pairs: toPairs(cached),
+      };
     }
   }
 
@@ -110,8 +122,7 @@ export async function handleImageTranslation(imageData, imageUrl, imageDims, opt
     await incrementApiStats(provider);
     const r = applyLayerB(translations);
     // Phase 4: 翻訳ペアを返す（original/translated の組、layer B 適用前の raw）
-    const pairs = translations.map(t => ({ original: t.original, translated: t.translated })).filter(p => p.original && p.translated);
-    return { translations: r.translations, glossaryHits: r.glossaryHits, pairs };
+    return { translations: r.translations, glossaryHits: r.glossaryHits, pairs: toPairs(translations) };
   } catch (err) {
     // APIキー等の機密情報が含まれないようサニタイズしてから返す
     const safeMsg = err.message

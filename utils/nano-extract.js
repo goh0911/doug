@@ -148,6 +148,22 @@ export function parseCandidatesJson(text) {
  * @param {Array<string>} rejectedOriginals
  * @returns {{ glossaryLangMap: Object, added: number }}
  */
+/**
+ * 一方が他方の途中で切れた表記か（UNITED STATES MILIT / UNITED STATES MILITARY）。
+ *
+ * Nano の出力が途中で切れると、同じ語が 2 つ登録されてしまう（実機で発生）。
+ * ただし単純な前方一致で潰すと HULK と HULKBUSTER のような別語まで巻き添えになるため、
+ * 長さがほぼ同じ（8 割以上）で、かつ切れ目が語の途中である場合に限る。
+ * @returns {boolean}
+ */
+function isTruncationOf(shorter, longer) {
+  if (shorter.length >= longer.length) return false;
+  if (!longer.startsWith(shorter)) return false;
+  // 切れ目が空白なら別語の可能性が高い（"RED HULK" と "RED HULK JR"）
+  if (!/[A-Za-z0-9]/.test(longer.charAt(shorter.length))) return false;
+  return shorter.length / longer.length >= 0.8;
+}
+
 export function mergeCandidates(glossaryLangMap, candidates, rejectedOriginals = []) {
   const rejectedSet = new Set(rejectedOriginals);
   let added = 0;
@@ -157,6 +173,16 @@ export function mergeCandidates(glossaryLangMap, candidates, rejectedOriginals =
     if (!c || !c.original || !c.translated) continue;
     if (next[c.original]) continue; // 既存（approved/pending）は触らない
     if (rejectedSet.has(c.original)) continue; // 却下記憶
+
+    // 途中で切れた表記との重複を避ける。長いほうを残す
+    const truncated = Object.keys(next).find((k) => isTruncationOf(k, c.original));
+    if (truncated) {
+      // 既存が切れた表記だった → 承認済みでなければ差し替える
+      if (next[truncated].approved) continue;
+      delete next[truncated];
+    } else if (Object.keys(next).some((k) => isTruncationOf(c.original, k))) {
+      continue; // 新しい候補のほうが切れている
+    }
     next[c.original] = {
       translated: c.translated,
       approved: false,
@@ -171,8 +197,24 @@ export function mergeCandidates(glossaryLangMap, candidates, rejectedOriginals =
   return { glossaryLangMap: next, added };
 }
 
+/** 訳文中のカタカナ連続（3 文字以上）の個数。日本語では固有名詞の指標になる */
+function katakanaRunCount(s) {
+  const m = String(s ?? '').match(/[ァ-ヶー]{3,}/g);
+  return m ? m.length : 0;
+}
+
 /**
- * 翻訳ペアを長い original 順にサンプリングする
+ * 翻訳ペアをサンプリングする。
+ *
+ * 元は「original が長い順」だけだったが、それだと固有名詞を取りこぼす。
+ * 固有名詞は短い吹き出しに出ることが多く、長さで切ると構造的に落ちる
+ * （実機で レッドハルク / ドク・グリーン が一度も抽出されなかった）。
+ *
+ * 英語のコミックは全文が大文字なので大小文字は手掛かりにならない。
+ * 代わりに **訳文のカタカナ連続** を使う。レッドハルク・トニー・スターク・
+ * エクストリーミス はいずれもカタカナで、一般名詞と区別できる。
+ * 同点なら従来どおり長い順（文脈が多いほうが Nano の判断材料になる）。
+ *
  * @param {Array} pairs
  * @param {number} limit
  * @returns {Array}
@@ -181,7 +223,11 @@ export function sampleRecentPairs(pairs, limit = 5) {
   if (!Array.isArray(pairs)) return [];
   if (pairs.length <= limit) return pairs;
   return [...pairs]
-    .sort((a, b) => (b.original?.length ?? 0) - (a.original?.length ?? 0))
+    .sort((a, b) => {
+      const d = katakanaRunCount(b.translated) - katakanaRunCount(a.translated);
+      if (d !== 0) return d;
+      return (b.original?.length ?? 0) - (a.original?.length ?? 0);
+    })
     .slice(0, limit);
 }
 

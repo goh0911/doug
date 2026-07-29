@@ -23,6 +23,7 @@ const NO_OP_INTERVAL_MS = 60 * 1000;
 // Phase 4: Nano 用語集自動抽出 定数
 const EXTRACTION_THRESHOLD = 20;          // recentPairs がこの件数に達したら抽出予約
 const RECENT_PAIRS_MAX = 50;              // recentPairs バッファ上限
+const PAIRS_PER_TRANSLATION = 10;         // 1 翻訳あたり recentPairs に記録する件数
 const EXAMPLES_MAX = 10;                   // few-shot 例文の保持上限（Phase 6）
 // 抽出ロックのタイムアウト。background.js の EXTRACTION_NANO_TIMEOUT_MS（60 秒）より
 // 必ず長くすること。短いと処理中にロックが失効し、Service Worker 再起動をまたいで
@@ -238,7 +239,9 @@ export async function recordSeriesTranslation({ seriesId, name, detectionSource,
  */
 function appendRecentPairs(series, pairs) {
   if (!Array.isArray(pairs) || pairs.length === 0) return;
-  const sampled = sampleRecentPairs(pairs, 5);
+  // 1 翻訳あたりの記録数。5 だと 1 ページ 20 個の吹き出しの 4 分の 1 しか
+  // 抽出に届かず、固有名詞を取りこぼしていた（実機で確認）
+  const sampled = sampleRecentPairs(pairs, PAIRS_PER_TRANSLATION);
   const list = Array.isArray(series.recentPairs) ? series.recentPairs : [];
   const now = Date.now();
   for (const p of sampled) {

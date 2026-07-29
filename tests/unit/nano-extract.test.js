@@ -270,6 +270,50 @@ describe('mergeCandidates', () => {
     expect(glossaryLangMap['Hulk'].source).toBe('nano-extract');
   });
 
+  it('途中で切れた表記を長いほうに差し替える（実機で 2 重登録された）', () => {
+    const existing = {
+      'UNITED STATES MILIT': { translated: '合衆国軍', approved: false, count: 0 },
+    };
+    const { glossaryLangMap, added } = mergeCandidates(existing, [
+      { original: 'UNITED STATES MILITARY', translated: '合衆国軍' },
+    ]);
+    expect(added).toBe(1);
+    expect(glossaryLangMap['UNITED STATES MILITARY']).toBeDefined();
+    expect(glossaryLangMap['UNITED STATES MILIT']).toBeUndefined();
+  });
+
+  it('新しい候補のほうが切れている場合は追加しない', () => {
+    const existing = {
+      'UNITED STATES MILITARY': { translated: '合衆国軍', approved: false, count: 0 },
+    };
+    const { glossaryLangMap, added } = mergeCandidates(existing, [
+      { original: 'UNITED STATES MILIT', translated: '合衆国軍' },
+    ]);
+    expect(added).toBe(0);
+    expect(glossaryLangMap['UNITED STATES MILIT']).toBeUndefined();
+  });
+
+  it('前方一致でも別語なら巻き添えにしない（HULK / HULKBUSTER）', () => {
+    const existing = { 'HULK': { translated: 'ハルク', approved: false, count: 0 } };
+    const { glossaryLangMap, added } = mergeCandidates(existing, [
+      { original: 'HULKBUSTER', translated: 'ハルクバスター' },
+    ]);
+    expect(added).toBe(1);
+    expect(glossaryLangMap['HULK']).toBeDefined();
+    expect(glossaryLangMap['HULKBUSTER']).toBeDefined();
+  });
+
+  it('切れた表記が承認済みなら触らない', () => {
+    const existing = {
+      'UNITED STATES MILIT': { translated: '合衆国軍', approved: true, count: 3 },
+    };
+    const { glossaryLangMap, added } = mergeCandidates(existing, [
+      { original: 'UNITED STATES MILITARY', translated: '合衆国軍' },
+    ]);
+    expect(added).toBe(0);
+    expect(glossaryLangMap['UNITED STATES MILIT'].approved).toBe(true);
+  });
+
   it('既存 approved エントリを上書きしない', () => {
     const existing = { 'Hulk': { translated: 'old', approved: true, count: 5 } };
     const { added, glossaryLangMap } = mergeCandidates(existing, [{ original: 'Hulk', translated: 'new' }]);

@@ -211,12 +211,22 @@ function renderGlossaryRows(container, entries, seriesId, targetLang) {
   });
 }
 
-// Phase 6: recentPairs を長い original 順にサンプリング（utils/nano-extract.js の sampleRecentPairs と同期）
+// Phase 6: recentPairs のサンプリング（utils/nano-extract.js の sampleRecentPairs と同期）
+// 訳文のカタカナ連続を優先し、同点なら original が長い順
+function katakanaRunCount(s) {
+  const m = String(s ?? '').match(/[ァ-ヶー]{3,}/g);
+  return m ? m.length : 0;
+}
+
 function sampleRecentPairs(pairs, limit) {
   if (!Array.isArray(pairs)) return [];
   if (pairs.length <= limit) return pairs;
   return [...pairs]
-    .sort((a, b) => (b.original?.length ?? 0) - (a.original?.length ?? 0))
+    .sort((a, b) => {
+      const d = katakanaRunCount(b.translated) - katakanaRunCount(a.translated);
+      if (d !== 0) return d;
+      return (b.original?.length ?? 0) - (a.original?.length ?? 0);
+    })
     .slice(0, limit);
 }
 
