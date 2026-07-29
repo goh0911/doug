@@ -434,6 +434,20 @@ JSON配列のみ返してください:
       '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">' +
       '<line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>');
 
+    // 再翻訳モード: ON の間は解説ポップアップを出さず、再翻訳ボタンだけを出す。
+    // 通常モードでは解説が優先され、解説表示中は再翻訳ボタンを抑制する
+    const modeBtn = document.createElement('button');
+    modeBtn.id = 'mut-btn-mode';
+    modeBtn.className = 'mut-btn';
+    modeBtn.title = '再翻訳モード（解説を出さずパネル再翻訳ボタンを使う）';
+    modeBtn.style.display = 'none';
+    modeBtn.setAttribute('aria-pressed', 'false');
+    modeBtn.insertAdjacentHTML('afterbegin',
+      '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">' +
+      '<path d="M23 4v6h-6"/><path d="M1 20v-6h6"/>' +
+      '<path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>' +
+      '</svg>');
+
     const debugBtn = document.createElement('button');
     debugBtn.id = 'mut-btn-debug';
     debugBtn.className = 'mut-btn';
@@ -451,7 +465,7 @@ JSON配列のみ返してください:
     seriesIndicator.className = 'mut-series-indicator mut-series-indicator--none';
     seriesIndicator.textContent = '📚 検出不可';
 
-    toolbar.append(translateBtn, autoBtn, toggleBtn, clearBtn, debugBtn, seriesIndicator);
+    toolbar.append(translateBtn, autoBtn, toggleBtn, clearBtn, modeBtn, debugBtn, seriesIndicator);
     const parent = getUIParent();
     parent.appendChild(toolbar);
 
@@ -470,6 +484,7 @@ JSON配列のみ返してください:
     document.getElementById('mut-btn-auto').addEventListener('click', toggleAutoTranslate);
     document.getElementById('mut-btn-toggle').addEventListener('click', toggleOverlays);
     document.getElementById('mut-btn-clear').addEventListener('click', clearOverlays);
+    document.getElementById('mut-btn-mode').addEventListener('click', toggleRetranslateMode);
     document.getElementById('mut-btn-debug').addEventListener('click', () => {
       if (_debugCanvas) {
         clearPanelDebug();
@@ -509,7 +524,22 @@ JSON配列のみ返してください:
   function showExtraButtons() {
     document.getElementById('mut-btn-toggle').style.display = '';
     document.getElementById('mut-btn-clear').style.display = '';
+    document.getElementById('mut-btn-mode').style.display = '';
     document.getElementById('mut-btn-debug').style.display = '';
+  }
+
+  // 再翻訳モードの ON/OFF。ON にした時点で出ている解説は閉じる
+  function toggleRetranslateMode() {
+    retranslateMode = !retranslateMode;
+    const btn = document.getElementById('mut-btn-mode');
+    if (btn) {
+      btn.classList.toggle('mut-btn-active', retranslateMode);
+      btn.setAttribute('aria-pressed', retranslateMode ? 'true' : 'false');
+      btn.title = retranslateMode
+        ? '再翻訳モード: ON（解説は出ません）'
+        : '再翻訳モード（解説を出さずパネル再翻訳ボタンを使う）';
+    }
+    if (retranslateMode) hideGlossPopup();
   }
 
   // v2 Phase 1: シリーズインジケーター更新
@@ -1727,7 +1757,15 @@ JSON配列のみ返してください:
   // フェーズ3: パネル再翻訳ボタンを overlayContainer に追加
   // mousemove で各パネル bbox 内にカーソルがあるか判定して表示/非表示を切り替える
   // ============================================================
+  // 直前に張った再翻訳ボタン群を外すための関数（addPanelRetranslateButtons が設定）
+  let panelBtnCleanup = null;
+
   function addPanelRetranslateButtons(pgResult) {
+    // 前回ぶんを必ず捨てる。同じ overlayContainer に対して 2 回呼ばれると
+    // ボタンと mousemove ハンドラが二重に並存し、それぞれが 1 個ずつ表示するため
+    // 再翻訳ボタンが 2 個出る（実機で発生）
+    clearPanelRetranslateButtons();
+
     if (!overlayContainer || !pgResult || pgResult.groups.length === 0) {
       console.log('[doug] addPanelRetranslateButtons early return:', { hasContainer: !!overlayContainer, hasPgResult: !!pgResult, groupsLen: pgResult?.groups?.length });
       return;
@@ -1793,11 +1831,16 @@ JSON配列のみ返してください:
         }
       }
 
-      const newGid = bestEntry ? bestEntry.btn.dataset.groupId : null;
+      // 解説ポップアップが出ている間はボタンを出さない。同じ吹き出しの上で
+      // 解説と再翻訳ボタンが重なって読めなくなるため（再翻訳モードでは解説が
+      // 出ないので、この抑制は働かない）
+      const suppressed = glossPopupEl !== null;
+
+      const newGid = (bestEntry && !suppressed) ? bestEntry.btn.dataset.groupId : null;
       if (newGid !== currentGroupId) {
         currentGroupId = newGid;
         for (const { btn } of btns) btn.classList.remove('mut-panel-btn-visible');
-        if (bestEntry) {
+        if (bestEntry && !suppressed) {
           // 吹き出しクラスターの中心に固定配置（カーソル位置に依存しない）
           bestEntry.btn.style.left      = bestEntry.cx + '%';
           bestEntry.btn.style.top       = bestEntry.cy + '%';
@@ -1808,12 +1851,18 @@ JSON配列のみ返してください:
     };
     document.addEventListener('mousemove', panelMoveHandler, { passive: true });
 
-    // クリーンアップを既存の _cleanup に合成
-    const prevCleanup = overlayContainer._cleanup;
-    overlayContainer._cleanup = () => {
-      prevCleanup?.();
+    // 次回の addPanelRetranslateButtons / clearOverlays で確実に外せるようにする。
+    // overlayContainer._cleanup への合成だけだと、renderOverlays が _cleanup を
+    // 上書き代入したときにハンドラが外れず残る
+    panelBtnCleanup = () => {
       document.removeEventListener('mousemove', panelMoveHandler);
+      for (const { btn } of btns) btn.remove();
     };
+  }
+
+  // 直前に張った再翻訳ボタンとそのハンドラを外す（未設定なら何もしない）
+  function clearPanelRetranslateButtons() {
+    if (panelBtnCleanup) { panelBtnCleanup(); panelBtnCleanup = null; }
   }
 
   // ============================================================
@@ -1964,6 +2013,8 @@ JSON配列のみ返してください:
   // ============================================================
   let glossPopupEl = null;
   let glossHoverTimer = null;
+  // 再翻訳モード中は解説を出さない（パネル再翻訳ボタンと競合させないため）
+  let retranslateMode = false;
   // role="tooltip" の内容をスクリーンリーダーに関連付けるための id（設計書 §7.2）。
   // ポップアップは常に1個しか存在しないため固定 id で足りる
   const GLOSS_POPUP_ID = 'doug-gloss-popup';
@@ -1976,6 +2027,8 @@ JSON配列のみ返してください:
   }
 
   function showGlossPopup(spanEl) {
+    // 再翻訳モード中は解説を出さない（下線は残すが hover しても反応しない）
+    if (retranslateMode) return;
     // 150ms の遅延中に renderTranslatedText の再描画で span が差し替えられている場合、
     // getBoundingClientRect() が全ゼロを返しポップアップが左上に取り残されるため何もしない
     if (!spanEl.isConnected) {
@@ -2691,6 +2744,7 @@ JSON配列のみ返してください:
 
   function clearOverlays() {
     clearPanelDebug();
+    clearPanelRetranslateButtons();
     _lastPanelGroups = null;
     // glossPopupEl は overlayContainer の外（getUIParent() 直下）にあるため、
     // overlayContainer を消しても連動して消えない。カーソル下から要素が消えても
@@ -2707,9 +2761,11 @@ JSON配列のみ返してください:
     }
     const toggleBtn = document.getElementById('mut-btn-toggle');
     const clearBtn = document.getElementById('mut-btn-clear');
+    const modeBtn = document.getElementById('mut-btn-mode');
     const debugBtn = document.getElementById('mut-btn-debug');
     if (toggleBtn) toggleBtn.style.display = 'none';
     if (clearBtn) clearBtn.style.display = 'none';
+    if (modeBtn) modeBtn.style.display = 'none';
     if (debugBtn) debugBtn.style.display = 'none';
   }
 
