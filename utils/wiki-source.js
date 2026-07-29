@@ -101,18 +101,65 @@ export function extractPowers(extract) {
   return '';
 }
 
+/** 導入節の最小長。これ未満はスタブ記事とみなし解説に使わない */
+const INTRO_MIN_LENGTH = 60;
+
 /**
- * 検証ゲート（設計書 §1.2・実測 6/6 正答）。
- * 誤ったページの内容を黙って採用しないための唯一の関門。
- * @param {{ intro?: string, powers?: string }} parts
+ * 照合用の正規化。曖昧さ回避の括弧を落とし、記号を除去して空白を畳む。
+ * S.H.I.E.L.D. → shield / Spider-Man → spiderman のように、
+ * 表記の揺れを吸収したうえで比較できるようにする。
+ */
+function normalizeForMatch(s) {
+  return String(s ?? '')
+    .toLowerCase()
+    .replace(/\([^)]*\)/g, ' ')
+    .replace(/[.'‘’\-–—_,:;!?"]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/**
+ * 取得した記事が検索語の記事かを判定する。
+ *
+ * gsrlimit=1 の検索は語と無関係な記事を平気で返す（実測）:
+ *   "S.H.I.E.L.D." Immortal Hulk comics → Absorbing Man
+ *   "Gamma Base"   Immortal Hulk comics → Betty Ross
+ * どちらも能力節を持ちコミック記事なので、旧ゲートは素通りさせて
+ * 「別人の解説」を表示していた。
+ *
+ * タイトル一致だけを条件にすると別名が落ちる（Red Hulk → 記事名 Thunderbolt Ross、
+ * Tony Stark → Iron Man）ため、導入節に語が現れることも許容する。
+ * 導入節は記事の定義部分なので、無関係な記事が偶然含む可能性は低い。
+ *
+ * @param {string} term 検索語（glossary の原語）
+ * @param {string} title 取得した記事タイトル
+ * @param {string} intro 導入節
+ * @returns {boolean}
+ */
+export function termAppearsIn(term, title, intro) {
+  const t = normalizeForMatch(term);
+  if (t === '') return false;
+  const haystack = normalizeForMatch(`${title ?? ''} ${intro ?? ''}`);
+  return haystack.includes(t);
+}
+
+/**
+ * 検証ゲート（設計書 §1.2）。誤ったページの内容を黙って採用しないための唯一の関門。
+ *
+ * 能力節は必須にしない。必須にすると S.H.I.E.L.D.（組織）や Gamma Base（場所）が
+ * 全部落ちるため。人物なら powers を、組織・場所なら intro だけを解説に使う。
+ * 品質の担保は termAppearsIn（記事の同一性）と導入節の長さに移している。
+ *
+ * @param {{ term?: string, title?: string, intro?: string, powers?: string }} parts
  * @returns {boolean}
  */
 export function passesGate(parts) {
   if (!parts || typeof parts !== 'object') return false;
-  const { intro, powers } = parts;
-  if (typeof powers !== 'string' || powers.length === 0) return false;
-  if (typeof intro !== 'string') return false;
-  return /comic/i.test(intro);
+  const { term, title, intro, powers } = parts;
+  if (typeof powers !== 'string') return false;
+  if (typeof intro !== 'string' || intro.length < INTRO_MIN_LENGTH) return false;
+  if (!/comic/i.test(intro)) return false;
+  return termAppearsIn(term, title, intro);
 }
 
 /**

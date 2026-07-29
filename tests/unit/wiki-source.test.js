@@ -2,7 +2,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   WIKIPEDIA_ORIGIN, buildSearchUrl, parseSearchResponse,
-  extractIntro, extractPowers, passesGate, buildPageUrl,
+  extractIntro, extractPowers, passesGate, termAppearsIn, buildPageUrl,
 } from '../../utils/wiki-source.js';
 
 describe('buildSearchUrl', () => {
@@ -102,19 +102,71 @@ describe('extractPowers', () => {
   });
 });
 
-describe('passesGate（設計書 §1.2 の実測 6 ケース）', () => {
-  const comicIntro = 'X is a character appearing in American comic books published by Marvel.';
-
-  it('能力節あり＋導入に comic → 通す', () => {
-    expect(passesGate({ intro: comicIntro, powers: 'teleports' })).toBe(true);
+describe('termAppearsIn', () => {
+  it('記号の違いを吸収してタイトルと照合する（S.H.I.E.L.D. / SHIELD）', () => {
+    expect(termAppearsIn('S.H.I.E.L.D.', 'S.H.I.E.L.D.', 'x')).toBe(true);
+    expect(termAppearsIn('SPIDER-MAN', 'Spider-Man', 'x')).toBe(true);
   });
 
-  it('能力節なし → 落とす（Xavier Institute / Sokovia の失敗様式）', () => {
-    expect(passesGate({ intro: comicIntro, powers: '' })).toBe(false);
+  it('曖昧さ回避の括弧を無視する（Vision → Vision (Marvel Comics)）', () => {
+    expect(termAppearsIn('VISION', 'Vision (Marvel Comics)', 'x')).toBe(true);
   });
 
-  it('導入に comic が無い → 落とす（無関係な記事を引いた場合）', () => {
-    expect(passesGate({ intro: 'A city in Europe.', powers: 'something' })).toBe(false);
+  it('タイトルが別名でも導入節に語があれば通す（Red Hulk → Thunderbolt Ross）', () => {
+    const intro = 'Thunderbolt Ross is a character who later became the Red Hulk.';
+    expect(termAppearsIn('RED HULK', 'Thunderbolt Ross', intro)).toBe(true);
+  });
+
+  it('無関係な記事は落とす（実測: S.H.I.E.L.D. → Absorbing Man）', () => {
+    const intro = 'The Absorbing Man is a supervillain appearing in American comic books.';
+    expect(termAppearsIn('S.H.I.E.L.D.', 'Absorbing Man', intro)).toBe(false);
+  });
+
+  it('無関係な記事は落とす（実測: Gamma Base → Betty Ross）', () => {
+    const intro = 'Betty Ross is a character appearing in American comic books published by Marvel.';
+    expect(termAppearsIn('GAMMA BASE', 'Betty Ross', intro)).toBe(false);
+  });
+
+  it('空の語は照合しない', () => {
+    expect(termAppearsIn('', 'Anything', 'anything')).toBe(false);
+    expect(termAppearsIn(null, 'Anything', 'anything')).toBe(false);
+  });
+});
+
+describe('passesGate（設計書 §1.2）', () => {
+  const comicIntro = 'Vision is a superhero appearing in American comic books published by Marvel Comics.';
+
+  it('能力節あり＋導入に comic ＋記事が一致 → 通す', () => {
+    expect(passesGate({
+      term: 'VISION', title: 'Vision (Marvel Comics)', intro: comicIntro, powers: 'teleports',
+    })).toBe(true);
+  });
+
+  it('能力節が無くても通す（組織・場所を解説するため）', () => {
+    const shieldIntro = 'S.H.I.E.L.D. is a fictional espionage agency appearing in American comic books.';
+    expect(passesGate({
+      term: 'S.H.I.E.L.D.', title: 'S.H.I.E.L.D.', intro: shieldIntro, powers: '',
+    })).toBe(true);
+  });
+
+  it('記事が検索語と対応しない → 落とす（実測の誤取得を再現）', () => {
+    const absorbing = 'The Absorbing Man is a supervillain appearing in American comic books published by Marvel.';
+    expect(passesGate({
+      term: 'S.H.I.E.L.D.', title: 'Absorbing Man', intro: absorbing, powers: 'absorbs matter',
+    })).toBe(false);
+  });
+
+  it('導入に comic が無い → 落とす（実在の地名などを引いた場合）', () => {
+    const valley = 'Death Valley is a desert valley in Eastern California, in the northern Mojave Desert.';
+    expect(passesGate({
+      term: 'DEATH VALLEY', title: 'Death Valley', intro: valley, powers: '',
+    })).toBe(false);
+  });
+
+  it('導入節が短すぎるスタブ記事 → 落とす', () => {
+    expect(passesGate({
+      term: 'X', title: 'X', intro: 'X is a comic.', powers: 'y',
+    })).toBe(false);
   });
 
   it('引数が不正でも例外を投げず false', () => {

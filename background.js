@@ -343,8 +343,9 @@ async function tryWikipediaQuery(term, seriesName) {
 
   const intro = extractIntro(page.extract);
   const powers = extractPowers(page.extract);
-  // 誤ったページを黙って採用しないための唯一の関門（設計書 §1.2）
-  if (!passesGate({ intro, powers })) return null;
+  // 誤ったページを黙って採用しないための唯一の関門（設計書 §1.2）。
+  // term / title を渡さないと記事の同一性を検証できない（別人の解説が出る）
+  if (!passesGate({ term, title: page.title, intro, powers })) return null;
 
   return { title: page.title, url: buildPageUrl(page.title), intro, powers };
 }
