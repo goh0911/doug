@@ -204,6 +204,29 @@ describe('passesGate（設計書 §1.2）', () => {
     })).toBe(false);
   });
 
+  // 実機（Immortal Hulk #21）で誤採用された組み合わせ。すべて落とすこと
+  it.each([
+    ['RED HULK', 'List of Hulk titles',
+      'This is a list of comics titles featuring the Hulk, published by Marvel Comics. The Red Hulk appears in several.'],
+    ['UNITED STATES MILITARY', 'Father Time (Marvel Comics)',
+      'Father Time is a fictional character appearing in American comic books published by Marvel Comics, who served in the United States military.'],
+    ['HULK', 'The Incredible Hulk (comic book)',
+      'The Incredible Hulk is an ongoing comic book series featuring the Marvel Comics character the Hulk.'],
+  ])('実測の誤採用を落とす: %s → %s', (term, title, intro) => {
+    expect(passesGate({ term, title, intro, powers: 'x' })).toBe(false);
+  });
+
+  it.each([
+    ['S.H.I.E.L.D.', 'S.H.I.E.L.D.',
+      'S.H.I.E.L.D. is a fictional espionage agency appearing in American comic books published by Marvel Comics.'],
+    ['ROSS', 'Thunderbolt Ross',
+      'Lieutenant General Thaddeus E. "Thunderbolt" Ross is a character appearing in American comic books published by Marvel Comics.'],
+    ['VISION', 'Vision (Marvel Comics)',
+      'Vision is a superhero appearing in American comic books published by Marvel Comics. He is an android.'],
+  ])('正しい記事は通す: %s → %s', (term, title, intro) => {
+    expect(passesGate({ term, title, intro, powers: 'x' })).toBe(true);
+  });
+
   it('引数が不正でも例外を投げず false', () => {
     expect(passesGate({})).toBe(false);
     expect(passesGate(null)).toBe(false);

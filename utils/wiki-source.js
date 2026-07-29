@@ -187,17 +187,50 @@ export function termAppearsIn(term, title, intro) {
   // タイトルは記事の正規表記なので、記号を落とした形で照合してよい
   if (containsWord(normalizeTitleForMatch(title), t)) return true;
 
+  // 照合範囲は「最初の文の主語部分」まで。段落全体だと、記事の主題ではない語に
+  // 一致してしまう（実測: UNITED STATES MILITARY → Father Time の記事、
+  // RED HULK → List of Hulk titles）。Wikipedia の導入は
+  // 「X is a ...」の形なので、is/was の前が主題になる
   const para = firstParagraph(intro);
+  // 主語のほかに「別名」の記述も許す。別名は記事名と違う語で立項されるため
+  // （Red Hulk → 記事名 Thunderbolt Ross、"He later became the Red Hulk."）。
+  // 定型表現に限定することで、無関係な語への一致は防げる
+  const haystacks = [subjectOfFirstSentence(para), ...aliasPhrases(para)];
 
-  // 記号を落とすと一般名詞に化ける語は、導入節では元表記のまま照合する。
-  // S.H.I.E.L.D. を shield に正規化して照合すると、Captain America の記事の
-  // "uses a shield" に一致して別人の解説を採用してしまう（リリース前レビューで指摘）
+  // 記号を落とすと一般名詞に化ける語は元表記のまま照合する。
+  // S.H.I.E.L.D. を shield に正規化すると Captain America の "uses a shield" に当たる
   if (collapsesWhenNormalized(term)) {
     const raw = String(term).trim();
-    return new RegExp(`(^|[^A-Za-z0-9])${escapeRegExp(raw)}([^A-Za-z0-9]|$)`, 'i').test(para);
+    const re = new RegExp(`(^|[^A-Za-z0-9])${escapeRegExp(raw)}([^A-Za-z0-9]|$)`, 'i');
+    return haystacks.some((h) => re.test(h));
   }
 
-  return containsWord(normalizeForMatch(para), t);
+  return haystacks.some((h) => containsWord(normalizeForMatch(h), t));
+}
+
+/** 「also known as X」「later became X」等、別名を示す定型表現の X を集める */
+function aliasPhrases(paragraph) {
+  const re = /(?:also known as|better known as|later became|later becomes|who becomes|alias(?:es)?|a\.k\.a\.)\s+([^.,;]{1,60})/gi;
+  const out = [];
+  let m;
+  while ((m = re.exec(String(paragraph ?? ''))) !== null) out.push(m[1]);
+  return out;
+}
+
+/**
+ * 最初の文のうち、主語にあたる部分を返す。
+ * 「Father Time is a fictional character ...」→「Father Time」
+ * 「This is a list of comics titles featuring the Hulk」→「This」
+ * コピュラが見つからなければ最初の文をそのまま返す。
+ */
+function subjectOfFirstSentence(paragraph) {
+  const s = String(paragraph ?? '').trim();
+  if (s === '') return '';
+  // 文末は「. 」＋大文字 で判定（Dr. / U.S. のような略語で切らないため）
+  const endMatch = s.match(/\.\s+[A-Z(]/);
+  const sentence = endMatch ? s.slice(0, endMatch.index + 1) : s;
+  const copula = sentence.match(/\s(?:is|was|are|were)\s/i);
+  return copula ? sentence.slice(0, copula.index) : sentence;
 }
 
 /**
@@ -216,7 +249,21 @@ export function passesGate(parts) {
   if (typeof powers !== 'string') return false;
   if (typeof intro !== 'string' || intro.length < INTRO_MIN_LENGTH) return false;
   if (!/comic/i.test(intro)) return false;
+  if (isNonEntityArticle(title)) return false;
   return termAppearsIn(term, title, intro);
+}
+
+/**
+ * 人物・組織・場所ではなく、作品や一覧の記事か。
+ * 実測: HULK → The Incredible Hulk (comic book)（出版物）、
+ *       RED HULK → List of Hulk titles（一覧）。
+ * どちらも「その語の解説」にならないので落とす。
+ * 「(comics)」「(Marvel Comics)」はキャラクター記事の曖昧さ回避なので除外しない。
+ */
+function isNonEntityArticle(title) {
+  const t = String(title ?? '');
+  if (/^list of /i.test(t.trim())) return true;
+  return /\((?:comic book|comic strip|magazine|TV series|film|video game|novel|album|soundtrack)\)/i.test(t);
 }
 
 /**
