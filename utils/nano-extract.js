@@ -67,6 +67,20 @@ export function sanitizeCandidate(candidate) {
   //   実在の名前を落とす誤検出のほうが代償が大きい。
   if (!/^[A-Za-z0-9]/.test(orig)) return null;
 
+  // 1 語の英単語で、日本語訳にカタカナが 1 文字も無い候補を弾く。
+  // 実機で MENTOR（訳: 恩師）が固有名詞として登録され、Wikipedia の
+  // Mentor (A'lars)＝タノスの父の解説が出た。英日コミック翻訳では固有名詞は
+  // ほぼカタカナになるため、漢字・ひらがなだけの訳は一般名詞の可能性が高い。
+  //
+  // 複数語には適用しない。SHADOW BASE（訳: 影の基地）のように、意訳されても
+  // 固有名詞であるものを巻き添えにするため。1 語に絞れば誤検出は小さい
+  const isSingleWord = !/\s/.test(orig.trim());
+  const hasJapanese = /[ぁ-んァ-ヶ一-龯]/.test(trans);
+  const hasKatakana = /[ァ-ヶー]/.test(trans);
+  if (isSingleWord && hasJapanese && !hasKatakana) {
+    return null;
+  }
+
   // translated のサニタイズ（制御文字・方向制御・タグ文字除去＋区切り記号エスケープ）
   // ※ escapeDelimiters 追加（2026-07-25 監査 F-1: 入力側 sanitizePairForNano と対称化）
   const cleanTrans = escapeDelimiters(cleanControlChars(trans));

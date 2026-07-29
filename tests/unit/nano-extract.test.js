@@ -178,7 +178,8 @@ describe('sanitizeCandidate - 長さ境界', () => {
   });
 
   it('translated が 30 文字はOK', () => {
-    expect(sanitizeCandidate({ original: 'Hulk', translated: 'あ'.repeat(30) })).not.toBeNull();
+    // カタカナを含める（1 語の原語＋カタカナ無しの訳は一般名詞として弾かれるため）
+    expect(sanitizeCandidate({ original: 'Hulk', translated: 'ア'.repeat(30) })).not.toBeNull();
   });
 
   it('translated が 31 文字は null', () => {
@@ -261,6 +262,26 @@ describe('parseCandidatesJson', () => {
 // ============================================================
 // mergeCandidates
 // ============================================================
+describe('一般名詞の誤抽出を弾く（実機で MENTOR→恩師 が登録された）', () => {
+  it('1 語の原語でカタカナを含まない訳は弾く', () => {
+    expect(sanitizeCandidate({ original: 'MENTOR', translated: '恩師' })).toBeNull();
+    expect(sanitizeCandidate({ original: 'GENERAL', translated: '将軍' })).toBeNull();
+  });
+
+  it('複数語なら意訳されても通す（SHADOW BASE を巻き添えにしない）', () => {
+    expect(sanitizeCandidate({ original: 'SHADOW BASE', translated: '影の基地' })).not.toBeNull();
+  });
+
+  it('カタカナを含む訳は 1 語でも通す', () => {
+    expect(sanitizeCandidate({ original: 'ROSS', translated: 'ロス' })).not.toBeNull();
+    expect(sanitizeCandidate({ original: 'BANNER', translated: 'バナー' })).not.toBeNull();
+  });
+
+  it('訳が日本語でなければ判定しない（他言語ターゲット）', () => {
+    expect(sanitizeCandidate({ original: 'VISION', translated: 'Vision' })).not.toBeNull();
+  });
+});
+
 describe('mergeCandidates', () => {
   it('新規候補を追加する', () => {
     const { glossaryLangMap, added } = mergeCandidates({}, [{ original: 'Hulk', translated: 'ハルク' }]);

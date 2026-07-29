@@ -180,6 +180,17 @@ function escapeRegExp(s) {
  * @param {string} intro 導入節
  * @returns {boolean}
  */
+/**
+ * 記事タイトルが検索語そのものか（曖昧さ回避の括弧は無視）。
+ * "Banner" に対し "Brian Banner" は false、"S.H.I.E.L.D." は true。
+ * 1 語の姓のような曖昧な語で、同姓の別人を掴むのを避けるための優先度判定に使う
+ */
+export function isExactTitleMatch(term, title) {
+  const t = normalizeForMatch(term);
+  if (t === '') return false;
+  return normalizeTitleForMatch(title) === t;
+}
+
 export function termAppearsIn(term, title, intro) {
   const t = normalizeForMatch(term);
   if (t === '') return false;

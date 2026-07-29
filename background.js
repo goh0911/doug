@@ -23,7 +23,7 @@ import { derivePathPrefix } from './utils/url-pattern.js';
 import { buildSeriesDetectionPrompt, parseSeriesDetectionResponse } from './utils/series-nano.js';
 import {
   WIKIPEDIA_ORIGIN, SOURCE_ID, buildSearchUrl, parseSearchResponse,
-  extractIntro, extractPowers, passesGate, buildPageUrl,
+  extractIntro, extractPowers, passesGate, buildPageUrl, isExactTitleMatch,
 } from './utils/wiki-source.js';
 import { buildGlossPrompt, parseGlossResponse } from './utils/gloss-summary.js';
 import { sanitizePairForNano, parseCandidatesJson, buildExtractionPrompt } from './utils/nano-extract.js';
@@ -379,12 +379,18 @@ async function tryWikipediaQuery(term, seriesName) {
  * シリーズ名付きを先に試すからこそフォールバックが安全に成立する。
  */
 async function fetchWikipediaEntry(term, seriesName) {
-  // 試す順序は utils/gloss-policy.js の seriesNameAttempts が決める（テスト可能にするため）
+  // 試す順序は utils/gloss-policy.js の seriesNameAttempts が決める（テスト可能にするため）。
+  // 先勝ちにせず、タイトルが検索語そのものの結果を優先する。1 語の姓は曖昧で、
+  // シリーズ名つきの検索が同姓の別人を 1 位に返すことがある
+  // （実測: "BANNER" Immortal Hulk comics → Brian Banner＝ブルースの父）
+  let fallback = null;
   for (const attempt of seriesNameAttempts(seriesName)) {
     const hit = await tryWikipediaQuery(term, attempt);
-    if (hit) return hit;
+    if (!hit) continue;
+    if (isExactTitleMatch(term, hit.title)) return hit;
+    if (!fallback) fallback = hit;
   }
-  return null;
+  return fallback;
 }
 
 /** Nano で解説を生成する。不可・失敗は null */

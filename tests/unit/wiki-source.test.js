@@ -2,7 +2,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   WIKIPEDIA_ORIGIN, buildSearchUrl, parseSearchResponse,
-  extractIntro, extractPowers, passesGate, termAppearsIn, buildPageUrl,
+  extractIntro, extractPowers, passesGate, termAppearsIn, isExactTitleMatch, buildPageUrl,
 } from '../../utils/wiki-source.js';
 
 describe('buildSearchUrl', () => {
@@ -230,6 +230,22 @@ describe('passesGate（設計書 §1.2）', () => {
   it('引数が不正でも例外を投げず false', () => {
     expect(passesGate({})).toBe(false);
     expect(passesGate(null)).toBe(false);
+  });
+});
+
+describe('isExactTitleMatch（同姓の別人を避けるための優先度判定）', () => {
+  it('タイトルが検索語そのものなら true', () => {
+    expect(isExactTitleMatch('S.H.I.E.L.D.', 'S.H.I.E.L.D.')).toBe(true);
+    expect(isExactTitleMatch('VISION', 'Vision (Marvel Comics)')).toBe(true);
+  });
+
+  it('姓だけ一致する別人は false（実機: BANNER → Brian Banner）', () => {
+    expect(isExactTitleMatch('BANNER', 'Brian Banner')).toBe(false);
+    expect(isExactTitleMatch('ROSS', 'Thunderbolt Ross')).toBe(false);
+  });
+
+  it('空の語は false', () => {
+    expect(isExactTitleMatch('', 'Anything')).toBe(false);
   });
 });
 
