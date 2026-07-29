@@ -60,8 +60,9 @@ export function sanitizeCandidate(candidate) {
   // "... FORTEAN TO SHADOW BASE."）。固有名詞が記号で始まることはないため誤検出しない。
   //
   // ※ 当初は「末尾が文末記号かつ空白を含む」も弾いていたが撤回した。
-  //   Nick Fury Jr. / Mr. Fixit. のような実在の名前を巻き添えにするうえ、
-  //   守ろうとしていた台詞丸写しは responseConstraint（撤回済み）が原因だった。
+  //   Nick Fury Jr. / Mr. Fixit. のような実在の名前を巻き添えにする。
+  //   台詞丸写し自体の原因は入力ペアの過多による出力破綻で（background.js の
+  //   EXTRACTION_PAIRS_PER_RUN のコメントに実測値あり）、そちらは上限で塞いだ。
   //   仮に文が通っても解説側の検証ゲートで落ちて下線が出ないだけなので、
   //   実在の名前を落とす誤検出のほうが代償が大きい。
   if (!/^[A-Za-z0-9]/.test(orig)) return null;

@@ -584,6 +584,7 @@ JSON配列のみ返してください:
     // 層B置換（utils/glossary-substitute.js）が approved を要求するのは訳文を書き換えるためで、
     // 解説は誤った語なら background 側の検証ゲートで落ちて何も表示されない。危険度が違う。
     // ※ 層B置換側の approved ゲートは維持すること（訳文汚染を防ぐ唯一の関門）
+    // 先読みは background 側で nanoOnly:true なので、この経路から課金は発生しない
     const terms = Object.keys(langMap).filter((k) => {
       const e = langMap[k];
       return e && typeof e.translated === 'string' && e.translated !== '';
@@ -610,6 +611,17 @@ JSON配列のみ返してください:
     // 層B置換（utils/glossary-substitute.js）が approved を要求するのは訳文を書き換えるためで、
     // 解説は誤った語なら background 側の検証ゲートで落ちて何も表示されない。危険度が違う。
     // ※ 層B置換側の approved ゲートは維持すること（訳文汚染を防ぐ唯一の関門）
+    //
+    // 【課金の上界】この経路は先読みと違い nanoOnly:false で、Nano が使えない環境では
+    // 未承認語でも翻訳用 API が呼ばれる（approved がかつて担っていた歯止めが外れる）。
+    // 上界は「シリーズの glossary 登録語の異なり数 × 1 回」:
+    //   - glossEnabled が既定 false、かつ en.wikipedia.org の権限許可が要る
+    //   - Wikipedia 取得と検証ゲートが先で、素材が取れない語は API に到達しない
+    //   - 下の buildGlossTermList で 1 回の要求は 30 語に上限化
+    //   - 成功も失敗も glossDefs にキャッシュ（失敗は FAILED_TTL_MS=24h の負キャッシュ）
+    //     されるため、同じ語で繰り返し課金されない
+    // API フォールバックを approved 限定に戻さないこと。Nano 不可環境で自動抽出語の解説が
+    // 無言で出なくなり、この機能を導入した動機（承認作業なしに解説を出す）が消える。
     const terms = Object.keys(langMap).filter((k) => {
       const e = langMap[k];
       return e && typeof e.translated === 'string' && e.translated !== '';

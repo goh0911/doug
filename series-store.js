@@ -280,10 +280,11 @@ export async function acquireExtractionLock(seriesId) {
 
 /**
  * 抽出結果を適用する（マージ or 失敗記録）
- * @param {{ seriesId: string, candidates: Array<{original: string, translated: string}>, success: boolean }} param
+ * @param {{ seriesId: string, candidates: Array<{original: string, translated: string}>, success: boolean, consumedPairs?: number }} param
+ *   consumedPairs: 呼び出し側が実際に Nano に渡したペア数。省略時は recentPairs を全消去する
  * @returns {Promise<{ status: 'ok'|'locked'|'not-found', added?: number, glossaryLangMap?: object }>}
  */
-export async function applyExtractionResult({ seriesId, candidates, success }) {
+export async function applyExtractionResult({ seriesId, candidates, success, consumedPairs }) {
   return withSeriesLock(seriesId, async () => {
     const series = await getSeriesWithDefaults(seriesId);
     if (!series) return { status: 'not-found' };
@@ -318,8 +319,19 @@ export async function applyExtractionResult({ seriesId, candidates, success }) {
       ...glossary,
       [targetLang]: nextGlossaryLangMap,
     };
-    series.recentPairs = [];
-    series.extractionDue = false;
+    // 消費したぶんだけ先頭（＝古い側）から捨てる。全消去にすると、呼び出し側が
+    // ペア数上限（background.js の EXTRACTION_PAIRS_PER_RUN）で切って渡したとき、
+    // 渡していない新しい側のペアまで巻き添えで消える。
+    // consumedPairs 省略時は従来どおり全消去（ペア 0 件でロックだけ解放する経路など）。
+    const pairs = Array.isArray(series.recentPairs) ? series.recentPairs : [];
+    if (typeof consumedPairs === 'number' && consumedPairs >= 0) {
+      pairs.splice(0, consumedPairs);
+      series.recentPairs = pairs;
+    } else {
+      series.recentPairs = [];
+    }
+    // 積み残しが閾値以上あるなら次回の翻訳記録でもう一度走らせる
+    series.extractionDue = series.recentPairs.length >= EXTRACTION_THRESHOLD;
     series.extractionFailures = 0;
     series.extractionRunning = null;
     series.stats = {

@@ -229,8 +229,12 @@ async function runExtractionBg(seriesId) {
     //   ペア20件 →  5.4秒 / 固有名詞 ✅      ペア50件 → 65.1秒 / 台詞まるごと
     // 遅さは原因ではなく出力破綻の症状。10〜20 件が最適域なので上限を設ける。
     // （保存側は既に sampleRecentPairs(pairs, 5) で絞っており、抽出側だけ全件だった）
+    // 古い側から FIFO で消費する。成功時に消したのは「渡したぶんだけ」でなければ
+    // ならないので、件数を applyExtractionResult に伝える（全消去だと 21 件目以降＝
+    // 新しい側のペアが一度も抽出されないまま消える）
+    const consumedPairs = Math.min(series.recentPairs.length, EXTRACTION_PAIRS_PER_RUN);
     const sanitizedPairs = series.recentPairs
-      .slice(0, EXTRACTION_PAIRS_PER_RUN)
+      .slice(0, consumedPairs)
       .map(sanitizePairForNano)
       .filter(Boolean);
     // series.js の runExtraction と同じく 'ja' 固定（両者の挙動を揃えるため）
@@ -270,7 +274,8 @@ async function runExtractionBg(seriesId) {
     }
 
     // success:false でも呼ぶ（extractionRunning の解放と失敗回数の記録を store 側が行う）
-    await applyExtractionResult({ seriesId, candidates, success });
+    // consumedPairs は success:true の経路でしか使われない（失敗時にペアを捨てない）
+    await applyExtractionResult({ seriesId, candidates, success, consumedPairs });
   } catch {
     /* 抽出の失敗は翻訳結果に影響させない */
   } finally {
@@ -338,7 +343,9 @@ async function tryWikipediaQuery(term, seriesName) {
  * 用語がシリーズ名に含まれる場合は出版物・一覧記事に引っ張られる（実測）:
  *   "Hulk" Immortal Hulk comics → The Incredible Hulk (comic book)  能力節なし
  *   "Daredevil" Daredevil comics → Karen Page                       能力節なし
- * そこでゲートに落ちたときだけシリーズ名を外して 1 回だけ再試行する。
+ * そこで 1 本目が素材を返さなかったときにシリーズ名を外して 1 回だけ再試行する。
+ * 「返さなかった」にはゲート却下だけでなく 0 件ヒット・通信失敗・タイムアウトも含む
+ * （tryWikipediaQuery はいずれも null を返す）。再試行は 1 回だけなので上限は 2 コール。
  *
  * 順序が逆だと危険なので入れ替えないこと。シリーズ名無しの単独検索は
  * "Vision" comics → Scarlet Witch のように **ゲートを通る別人** を引くことがあり、
@@ -348,8 +355,10 @@ async function fetchWikipediaEntry(term, seriesName) {
   const first = await tryWikipediaQuery(term, seriesName);
   if (first) return first;
 
-  // シリーズ名を渡していない場合は再試行しても同じクエリになるので打ち切る
-  const s = String(seriesName ?? '').trim();
+  // シリーズ名を渡していない場合は再試行しても同じクエリになるので打ち切る。
+  // 判定は buildSearchUrl と同じ正規化（二重引用符除去 → trim）で行う。
+  // trim だけだと seriesName が '"' のとき非空と見なされ、同一クエリを 2 回投げる
+  const s = String(seriesName ?? '').split('"').join('').trim();
   if (s === '') return null;
 
   return tryWikipediaQuery(term, '');
@@ -721,27 +730,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       return;
     }
 
-    if (message.type === 'ACQUIRE_EXTRACTION_LOCK') {
-      try {
-        const { seriesId } = message.payload;
-        const result = await acquireExtractionLock(seriesId);
-        sendResponse(result);
-      } catch (err) {
-        sendResponse({ status: 'error', error: err.message });
-      }
-      return;
-    }
-
-    if (message.type === 'EXTRACT_GLOSSARY_CANDIDATES') {
-      try {
-        const { seriesId, candidates, success } = message.payload;
-        const result = await applyExtractionResult({ seriesId, candidates, success });
-        sendResponse(result);
-      } catch (err) {
-        sendResponse({ status: 'error', error: err.message });
-      }
-      return;
-    }
+    // ACQUIRE_EXTRACTION_LOCK / EXTRACT_GLOSSARY_CANDIDATES は削除した。
+    // series.js が抽出処理を自前で持っていた頃の受け口で、実処理を runExtractionBg に
+    // 一本化した時点で送信元が無くなった（ロック取得もマージも runExtractionBg 内で行う）。
 
     if (message.type === 'REJECT_GLOSSARY_CANDIDATE') {
       try {

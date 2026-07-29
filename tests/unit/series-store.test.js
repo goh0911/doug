@@ -947,6 +947,61 @@ describe('applyExtractionResult - success', () => {
     expect(series.extractionDue).toBe(false);
   });
 
+  it('consumedPairs を渡すと古い側だけが消え、新しい側が残る', async () => {
+    const { applyExtractionResult, getSeries } = await loadStore();
+    const now = Date.now();
+    _store['series:ex002b'] = {
+      meta: { name: 'Test' },
+      glossary: {},
+      stats: {},
+      // p0（最古）〜 p49（最新）
+      recentPairs: Array.from({ length: 50 }, (_, i) => ({
+        original: `p${i}`, translated: `訳${i}`, at: now + i,
+      })),
+      extractionDue: true,
+      extractionRunning: { startedAt: now },
+      extractionFailures: 0,
+      rejectedOriginals: [],
+    };
+
+    await applyExtractionResult({
+      seriesId: 'ex002b', candidates: [], success: true, consumedPairs: 20,
+    });
+
+    const series = await getSeries('ex002b');
+    expect(series.recentPairs).toHaveLength(30);
+    // 残るのは新しい側（p20〜p49）。長さだけでは切る向きの誤りを検出できない
+    expect(series.recentPairs[0].original).toBe('p20');
+    expect(series.recentPairs[29].original).toBe('p49');
+    // 積み残しが閾値（20）以上あるので次回も走らせる
+    expect(series.extractionDue).toBe(true);
+  });
+
+  it('consumedPairs を渡しても失敗時は recentPairs を消費しない', async () => {
+    const { applyExtractionResult, getSeries } = await loadStore();
+    const now = Date.now();
+    _store['series:ex002c'] = {
+      meta: { name: 'Test' },
+      glossary: {},
+      stats: {},
+      recentPairs: Array.from({ length: 25 }, (_, i) => ({
+        original: `p${i}`, translated: `訳${i}`, at: now + i,
+      })),
+      extractionDue: true,
+      extractionRunning: { startedAt: now },
+      extractionFailures: 0,
+      rejectedOriginals: [],
+    };
+
+    await applyExtractionResult({
+      seriesId: 'ex002c', candidates: [], success: false, consumedPairs: 20,
+    });
+
+    const series = await getSeries('ex002c');
+    expect(series.recentPairs).toHaveLength(25);
+    expect(series.recentPairs[0].original).toBe('p0');
+  });
+
   it('成功時に stats が更新される', async () => {
     const { applyExtractionResult, getSeries } = await loadStore();
     _store['series:ex003'] = {

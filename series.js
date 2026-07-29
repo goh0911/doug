@@ -2,36 +2,10 @@
 // Phase 4: Nano 用語集自動抽出 UI ロジックを含む
 
 // ============================================================
-// Phase 4: utils/nano-extract.js の pure 関数（series ページ用）
-// ============================================================
-
-/**
- * nano-extract.js の cleanControlChars 相当（インライン実装）
- * 制御文字・Unicode 方向制御・ゼロ幅・タグ文字を除去し、改行を正規化する。
- * ※ utils/nano-extract.js の cleanControlChars と必ず同期すること。
- */
-function _cleanControlChars(s) {
-  // 連続改行・タブを単一空白に（制御文字除去より先に処理）
-  s = s.replace(/[\r\n\t\u2028\u2029\u0085]+/g, ' ');
-  // 残余の制御文字 U+0000-U+001F, U+007F を除去
-  s = s.replace(/[\x00-\x1F\x7F-\x9F]/g, '');
-  // Unicode 方向制御 U+202A-U+202E を除去
-  s = s.replace(/[‪-‮]/g, '');
-  // Unicode 方向制御 U+2066-U+2069 を除去
-  s = s.replace(/[⁦-⁩]/g, '');
-  // ゼロ幅・方向制御 U+200B-U+200F を除去
-  s = s.replace(/[​-‏]/g, '');
-  // タグ文字 U+E0000-U+E007F を除去
-  s = s.replace(/[\u{E0000}-\u{E007F}]/gu, '');
-  return s;
-}
-
-
-
-
-// ============================================================
 // Phase 4: Nano 可用性チェック・抽出実行
 // ============================================================
+// サニタイズ・パース・プロンプト構築のインラインコピーはすべて削除した。
+// 用語抽出の実処理は background.js の runExtractionBg に一本化されている。
 
 async function isNanoAvailable() {
   if (typeof self.LanguageModel === 'undefined') return false;
@@ -44,12 +18,11 @@ async function isNanoAvailable() {
 }
 
 /**
- * Nano を使って recentPairs から用語候補を抽出する
+ * Nano を使って recentPairs から用語候補を抽出する（background に委譲）
  * @param {string} seriesId
- * @param {object} opts
  * @returns {Promise<void>}
  */
-async function runExtraction(seriesId, opts) {
+async function runExtraction(seriesId) {
   // 実処理は background.js の runExtractionBg に一本化する。
   // ここにコピーを置くと、スキーマ強制・ペア数上限・診断ログの修正が
   // 自動抽出側にしか効かなくなり、手動実行だけ古い挙動のまま取り残される。
@@ -485,7 +458,7 @@ async function _doExtraction(container, series, seriesId, targetLang) {
   if (runBtnEl) { runBtnEl.disabled = true; }
 
   try {
-    await runExtraction(seriesId, { manual: true });
+    await runExtraction(seriesId);
   } finally {
     // 例外が起きても必ず再描画し、UI が「抽出中…」で固まらないようにする
     const updated = await chrome.runtime.sendMessage({
