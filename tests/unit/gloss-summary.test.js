@@ -1,7 +1,7 @@
 // tests/unit/gloss-summary.test.js
 import { describe, it, expect } from 'vitest';
 import {
-  IDENTITY_MAX, POWERS_MAX, buildGlossPrompt, parseGlossResponse, truncateAtSentence,
+  IDENTITY_MAX, POWERS_MAX, buildGlossPrompt, parseGlossResponse, truncateAtSentence, firstSentences,
 } from '../../utils/gloss-summary.js';
 
 describe('buildGlossPrompt', () => {
@@ -144,6 +144,60 @@ describe('parseGlossResponse', () => {
   it('制御文字を除去する', () => {
     const r = parseGlossResponse('{"identity":"A\\u0000B","powers":"C"}');
     expect(r.identity).toBe('AB');
+  });
+});
+
+describe('firstSentences（要約でなく翻訳させるため入力を先頭の文に絞る）', () => {
+  const INTRO = 'Thaddeus E. "Thunderbolt" Ross is a character appearing in American comic books '
+    + 'published by Marvel Comics. He is the father of Betty Ross. Later he became the Red Hulk.';
+
+  it('1 文だけ取り出す', () => {
+    expect(firstSentences(INTRO, 1)).toBe(
+      'Thaddeus E. "Thunderbolt" Ross is a character appearing in American comic books published by Marvel Comics.'
+    );
+  });
+
+  it('2 文まで取り出せる', () => {
+    expect(firstSentences(INTRO, 2)).toContain('He is the father of Betty Ross.');
+    expect(firstSentences(INTRO, 2)).not.toContain('Red Hulk');
+  });
+
+  it.each([
+    ['S.H.I.E.L.D. is an agency. It appears in comics.', 'S.H.I.E.L.D. is an agency.'],
+    ['Dr. Banner is a scientist. He works alone.', 'Dr. Banner is a scientist.'],
+    ['Gen. Ross leads the base. Bruce fled.', 'Gen. Ross leads the base.'],
+    ['Thaddeus E. Ross is a general. He hunts.', 'Thaddeus E. Ross is a general.'],
+  ])('略語・敬称・イニシャルのピリオドでは切らない: %s', (input, expected) => {
+    expect(firstSentences(input, 1)).toBe(expected);
+  });
+
+  it('文末が無ければ全体を返す', () => {
+    expect(firstSentences('no sentence end here', 1)).toBe('no sentence end here');
+  });
+
+  it('空入力は空文字', () => {
+    expect(firstSentences('', 1)).toBe('');
+    expect(firstSentences(null, 1)).toBe('');
+  });
+});
+
+describe('buildGlossPrompt が翻訳を指示する（要約ではない）', () => {
+  it('要約でなく翻訳であることと、名前を補わないことを明示する', () => {
+    const p = buildGlossPrompt({ term: 'ROSS', intro: 'A is B. C is D.', powers: 'X. Y. Z.' });
+    expect(p).toContain('翻訳であって要約ではない');
+    expect(p).toContain('思い出した名前や一般知識で補ってはいけない');
+  });
+
+  it('intro は 1 文、powers は 2 文までに絞って渡す', () => {
+    const p = buildGlossPrompt({
+      term: 'ROSS',
+      intro: 'First one. Second one. Third one.',
+      powers: 'P one. P two. P three.',
+    });
+    expect(p).toContain('intro: First one.');
+    expect(p).not.toContain('Second one.');
+    expect(p).toContain('powers: P one. P two.');
+    expect(p).not.toContain('P three.');
   });
 });
 
