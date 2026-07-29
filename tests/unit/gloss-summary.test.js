@@ -68,6 +68,17 @@ describe('parseGlossResponse', () => {
     expect(r.powers.length).toBeLessThanOrEqual(POWERS_MAX);
   });
 
+  it('英略語のピリオドを文末と誤認しない（日本語の文末記号を優先する）', () => {
+    // 実装前は「…である。S.H.I.E.L.D.」のように略語の直後で切れていた
+    const long = 'S.H.I.E.L.D. は超常現象に対処する国際的な機関である。'.repeat(3);
+    expect(truncateAtSentence(long, 60)).toBe('S.H.I.E.L.D. は超常現象に対処する国際的な機関である。');
+  });
+
+  it('日本語の文末記号が無ければピリオドを使う（略語の内部では切らない）', () => {
+    const en = 'Mr. Stark is a hero. He builds armor. And more text here to exceed.';
+    expect(truncateAtSentence(en, 40)).toBe('Mr. Stark is a hero. He builds armor.');
+  });
+
   it('identity が用語名のオウム返しなら捨てる（実機で S.H.I.E.L.D. だけが返った）', () => {
     const r = parseGlossResponse(
       '{"identity":"S.H.I.E.L.D.","powers":"国際安全保障を維持する。"}', 'S.H.I.E.L.D.'

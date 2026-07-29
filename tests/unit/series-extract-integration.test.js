@@ -185,11 +185,12 @@ describe('二重実行ロック', () => {
     expect(result.status).toBe('locked');
   });
 
-  it('30 秒経過したロックは上書き取得できる', async () => {
+  it('タイムアウト（90 秒）を過ぎたロックは上書き取得できる', async () => {
     const { acquireExtractionLock, getSeries } = await loadStore();
     const now = Date.now();
     _store['series:lock002'] = makeSeries({
-      extractionRunning: { startedAt: now - 31_000 }, // タイムアウト
+      // 91 秒前。ロックは Nano のタイムアウト（60 秒）より長い 90 秒で失効する
+      extractionRunning: { startedAt: now - 91_000 },
     });
 
     const result = await acquireExtractionLock('lock002');

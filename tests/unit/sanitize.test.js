@@ -194,4 +194,19 @@ describe('escapeDelimiters（nano-extract から移設）', () => {
   it('区切り記号を含まない文字列はそのまま返す', () => {
     expect(escapeDelimiters('普通の文章です')).toBe('普通の文章です');
   });
+
+  it('大小文字・空白・別記法の区切りも潰す（リリース前レビュー指摘）', () => {
+    // Wikipedia は第三者が編集できるため、小文字表記で素通りすると
+    // プロンプトのブロック境界を偽装できる
+    expect(escapeDelimiters('[system]')).toBe('_');
+    expect(escapeDelimiters('[Data]')).toBe('_');
+    expect(escapeDelimiters('[ SYSTEM ]')).toBe('_');
+    expect(escapeDelimiters('<system>')).toBe('_');
+    expect(escapeDelimiters('</DATA>')).toBe('_');
+  });
+
+  it('ハイフンや通常の記号は消さない（方向制御文字の範囲指定と混同しない）', () => {
+    expect(cleanControlChars('Spider-Man X-Men')).toBe('Spider-Man X-Men');
+    expect(escapeDelimiters('Spider-Man')).toBe('Spider-Man');
+  });
 });

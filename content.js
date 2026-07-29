@@ -29,7 +29,6 @@
   const BBOX_STABLE_STEPS      = 30;   // 安定判定ウィンドウ数
   const BBOX_STABLE_GROWTH_MAX = 0.01; // bbox面積増加率の安定閾値（1%）
   /* eslint-disable-next-line no-unused-vars */
-  const PANEL_CROP_PADDING     = 0.07; // crop時のパディング率（フェーズ4で使用）
   const BUBBLE_CROP_PADDING    = 0.15; // 吹き出し単体crop時のパディング率（個別再翻訳）
   const SEED_SAMPLE_SIZE       = 5;    // 起点サンプル固定サイズ（5×5）
   const STABLE_CHECK_INTERVAL  = 100;  // 安定判定チェック間隔（ピクセル数、大パネルの早期終了防止で50→100）
@@ -1763,40 +1762,6 @@ JSON配列のみ返してください:
   // ============================================================
   // フェーズ4: パネル crop / 座標変換 / マージ / 再翻訳
   // ============================================================
-
-  // パネル bbox を PANEL_CROP_PADDING 分拡張して canvas で crop する（非同期）
-  // img.onload を待ってから drawImage する必要があるため Promise を返す
-  // 返値: Promise<{ dataUrl: string, cropBox: {x1,y1,x2,y2} } | null>
-  function cropPanelImage(imageDataUrl, group, W, H) {
-    return new Promise((resolve) => {
-      if (!imageDataUrl || !group || !group.unionBboxPx) { resolve(null); return; }
-      const { x1, y1, x2, y2 } = group.unionBboxPx;
-      const panelW = x2 - x1;
-      const panelH = y2 - y1;
-      const padX = panelW * PANEL_CROP_PADDING;
-      const padY = panelH * PANEL_CROP_PADDING;
-      const cropX1 = Math.max(0, Math.round(x1 - padX));
-      const cropY1 = Math.max(0, Math.round(y1 - padY));
-      const cropX2 = Math.min(W, Math.round(x2 + padX));
-      const cropY2 = Math.min(H, Math.round(y2 + padY));
-      const cropW  = cropX2 - cropX1;
-      const cropH  = cropY2 - cropY1;
-      if (cropW <= 0 || cropH <= 0) { resolve(null); return; }
-
-      const img = new Image();
-      img.onload = () => {
-        try {
-          const canvas = document.createElement('canvas');
-          canvas.width  = cropW;
-          canvas.height = cropH;
-          canvas.getContext('2d').drawImage(img, cropX1, cropY1, cropW, cropH, 0, 0, cropW, cropH);
-          resolve({ dataUrl: canvas.toDataURL('image/jpeg', 0.92), cropBox: { x1: cropX1, y1: cropY1, x2: cropX2, y2: cropY2 } });
-        } catch { resolve(null); }
-      };
-      img.onerror = () => resolve(null);
-      img.src = imageDataUrl;
-    });
-  }
 
   // transformBboxToFullPage — utils/panel-utils.js と同一内容（IIFE制約のためコピー）
   // utils/panel-utils.js 側を変更した場合はこちらも必ず同期すること

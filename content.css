@@ -343,7 +343,7 @@
 
 /* 再翻訳ボタンは「再翻訳モード」のときだけ出す。
    通常モードは読書のための表示（解説ポップアップ）に専念させる。
-   3 種類（ページ / パネル / 吹き出し）すべてが対象。
+   2 種類（ページ全体 / 吹き出し単体）が対象。
    :hover や JS のクラス付与より確実に勝つよう display で止める */
 #mut-overlay-container:not(.mut-retranslate-mode) .mut-reload-btn,
 #mut-overlay-container:not(.mut-retranslate-mode) .mut-bubble-retranslate-btn {

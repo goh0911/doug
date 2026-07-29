@@ -873,7 +873,7 @@ describe('acquireExtractionLock', () => {
     expect(result.status).toBe('locked');
   });
 
-  it('30 秒経過したロックは上書き取得できる', async () => {
+  it('タイムアウト（90 秒）を過ぎたロックは上書き取得できる', async () => {
     const { acquireExtractionLock } = await loadStore();
     const now = Date.now();
     _store['series:lock003'] = {
@@ -882,7 +882,8 @@ describe('acquireExtractionLock', () => {
       stats: {},
       recentPairs: [],
       extractionDue: true,
-      extractionRunning: { startedAt: now - 31_000 }, // 31 秒前（タイムアウト）
+      // 91 秒前。ロックは Nano のタイムアウト（60 秒）より長い 90 秒で失効する
+      extractionRunning: { startedAt: now - 91_000 },
       extractionFailures: 0,
       rejectedOriginals: [],
     };

@@ -24,7 +24,10 @@ const NO_OP_INTERVAL_MS = 60 * 1000;
 const EXTRACTION_THRESHOLD = 20;          // recentPairs がこの件数に達したら抽出予約
 const RECENT_PAIRS_MAX = 50;              // recentPairs バッファ上限
 const EXAMPLES_MAX = 10;                   // few-shot 例文の保持上限（Phase 6）
-const EXTRACTION_LOCK_TIMEOUT_MS = 30_000; // 抽出ロックタイムアウト（30 秒）
+// 抽出ロックのタイムアウト。background.js の EXTRACTION_NANO_TIMEOUT_MS（60 秒）より
+// 必ず長くすること。短いと処理中にロックが失効し、Service Worker 再起動をまたいで
+// second run が走って recentPairs を二重に消費する（実機で 37 秒の抽出を観測済み）
+const EXTRACTION_LOCK_TIMEOUT_MS = 90_000;
 const EXTRACTION_FAILURE_THRESHOLD = 3;   // 連続失敗でキャンセル
 
 // ============================================================
@@ -291,11 +294,9 @@ export async function applyExtractionResult({ seriesId, candidates, success, con
 
     const now = Date.now();
 
-    // ロック検証（30 秒以内の他者ロック）
-    if (series.extractionRunning && (now - series.extractionRunning.startedAt) < EXTRACTION_LOCK_TIMEOUT_MS) {
-      // 自分が取得したロックでない可能性があるが、ここでは状態を更新することを許可
-      // （series.js 側で acquireExtractionLock を先に呼んでいるため）
-    }
+    // ロックの所有者検証は行わない（呼び出し側が acquireExtractionLock を先に呼ぶ前提）。
+    // 空の if でロックを見ているように見せていたが実際には何もしていなかったため削除した。
+    // 二重実行そのものは EXTRACTION_LOCK_TIMEOUT_MS を処理時間より長く取ることで防ぐ。
 
     if (!success) {
       series.extractionFailures = (series.extractionFailures ?? 0) + 1;

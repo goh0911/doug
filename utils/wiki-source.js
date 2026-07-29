@@ -129,12 +129,29 @@ function normalizeTitleForMatch(s) {
   return normalizeForMatch(String(s ?? '').replace(/\([^)]*\)/g, ' '));
 }
 
-/** 導入節の最初の段落だけを返す。記事の定義部分はここに書かれる */
+/**
+ * 導入節の最初の段落だけを返す。記事の定義部分はここに書かれる。
+ * explaintext の導入節は段落ごとに改行で区切られるため、最初の改行で切る
+ * （`\n\s*\n|\n` と書いていたが、前者が当たる位置では後者も当たるので同義だった）
+ */
 function firstParagraph(intro) {
   const s = String(intro ?? '').trim();
   if (s === '') return '';
-  const idx = s.search(/\n\s*\n|\n/);
+  const idx = s.indexOf('\n');
   return idx === -1 ? s : s.slice(0, idx).trim();
+}
+
+/** 正規化済みの haystack に、正規化済みの語が語境界つきで現れるか */
+function containsWord(haystack, needle) {
+  return new RegExp(`(^| )${escapeRegExp(needle)}($| )`).test(haystack);
+}
+
+/**
+ * 記号を落とすと別の語に化ける表記か（S.H.I.E.L.D. → shield、Spider-Man → spiderman）。
+ * この種の語は導入節の照合に元表記を使う
+ */
+function collapsesWhenNormalized(term) {
+  return /[.'‘’\-–—_]/.test(String(term ?? ''));
 }
 
 /** 正規表現に埋め込むためのエスケープ */
@@ -166,8 +183,21 @@ function escapeRegExp(s) {
 export function termAppearsIn(term, title, intro) {
   const t = normalizeForMatch(term);
   if (t === '') return false;
-  const haystack = `${normalizeTitleForMatch(title)} ${normalizeForMatch(firstParagraph(intro))}`;
-  return new RegExp(`(^| )${escapeRegExp(t)}($| )`).test(haystack);
+
+  // タイトルは記事の正規表記なので、記号を落とした形で照合してよい
+  if (containsWord(normalizeTitleForMatch(title), t)) return true;
+
+  const para = firstParagraph(intro);
+
+  // 記号を落とすと一般名詞に化ける語は、導入節では元表記のまま照合する。
+  // S.H.I.E.L.D. を shield に正規化して照合すると、Captain America の記事の
+  // "uses a shield" に一致して別人の解説を採用してしまう（リリース前レビューで指摘）
+  if (collapsesWhenNormalized(term)) {
+    const raw = String(term).trim();
+    return new RegExp(`(^|[^A-Za-z0-9])${escapeRegExp(raw)}([^A-Za-z0-9]|$)`, 'i').test(para);
+  }
+
+  return containsWord(normalizeForMatch(para), t);
 }
 
 /**

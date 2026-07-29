@@ -156,13 +156,15 @@ async function detectSeriesWithNano({ title, url, h1, ogTitle } = {}) {
       topK: 1,
       expectedInputs: [{ type: 'text', languages: ['en', 'ja'] }],
       expectedOutputs: [{ type: 'text', languages: ['ja', 'en'] }],
+      // create() にも signal を渡す（渡さないとウォームアップで固まったとき中断できない）
+      signal: controller.signal,
     });
     responseText = await session.prompt(prompt, { signal: controller.signal });
   } catch {
     return null;
   } finally {
     clearTimeout(timeoutId);
-    if (session) session.destroy();
+    if (session) { try { session.destroy(); } catch { /* destroy 失敗は無視 */ } }
   }
 
   const parsed = parseSeriesDetectionResponse(responseText);
@@ -255,11 +257,15 @@ async function runExtractionBg(seriesId) {
     const timeoutId = setTimeout(() => controller.abort(), EXTRACTION_NANO_TIMEOUT_MS);
     try {
       // topK と temperature は両方指定が必須（片方だけは NotSupportedError）
+      // signal は create() にも渡す。prompt() だけに渡していると、モデルの
+      // ダウンロード／ウォームアップで create() が固まったときタイムアウトが効かず、
+      // in-flight ロックが Service Worker の生存期間中ずっと解放されない
       session = await self.LanguageModel.create({
         temperature: 0,
         topK: 1,
         expectedInputs: [{ type: 'text', languages: ['en', 'ja'] }],
         expectedOutputs: [{ type: 'text', languages: ['ja', 'en'] }],
+        signal: controller.signal,
       });
       const startedAt = Date.now();
       const responseText = await session.prompt(prompt, { signal: controller.signal });
@@ -393,6 +399,8 @@ async function generateWithNano(prompt, term) {
       topK: 1,
       expectedInputs: [{ type: 'text', languages: ['en', 'ja'] }],
       expectedOutputs: [{ type: 'text', languages: ['ja', 'en'] }],
+      // create() にも signal を渡す（渡さないとウォームアップで固まったとき中断できない）
+      signal: controller.signal,
     });
     text = await session.prompt(prompt, { signal: controller.signal });
   } catch (err) {
@@ -400,7 +408,7 @@ async function generateWithNano(prompt, term) {
     return null;
   } finally {
     clearTimeout(timeoutId);
-    if (session) session.destroy();
+    if (session) { try { session.destroy(); } catch { /* destroy 失敗は無視 */ } }
   }
   return parseGlossResponse(text, term);
 }
