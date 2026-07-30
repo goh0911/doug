@@ -857,6 +857,111 @@ describe('recordSeriesTranslation - pairs 追加', () => {
 });
 
 // ============================================================
+// recentPairs の重複除去
+// 翻訳キャッシュが効くようになり、同じページを読み直すと同一の pairs が返る。
+// sampleRecentPairs は決定的なので、除去しないと同じ 10 件が繰り返し積まれ、
+// EXTRACTION_THRESHOLD が重複だけで埋まって Nano 抽出が空回りする
+// ============================================================
+describe('recordSeriesTranslation - recentPairs の重複除去', () => {
+  const OLD = Date.now() - 61 * 1000;
+
+  /** 60 秒 no-op ガードに引っかからないシリーズを直接作る */
+  function seedSeries(seriesId, recentPairs, extra = {}) {
+    _store[`series:${seriesId}`] = {
+      meta: { name: 'Test', issueCount: 1, lastVisitedAt: OLD },
+      urlPatterns: [],
+      overrides: {},
+      glossary: {},
+      tone: { style: 'auto' },
+      stats: { translationCount: 1, lastTranslatedAt: OLD },
+      recentPairs,
+      extractionDue: false,
+      extractionRunning: null,
+      extractionFailures: 0,
+      rejectedOriginals: [],
+      ...extra,
+    };
+  }
+
+  function record(seriesId, pairs, page = 1) {
+    return import('../../series-store.js').then(({ recordSeriesTranslation }) =>
+      recordSeriesTranslation({
+        seriesId,
+        name: 'Test',
+        detectionSource: 'regex',
+        url: `https://example.com/comic/${page}`,
+        pairs,
+      }));
+  }
+
+  it('同一ページを読み直しても同じペアは二重に積まれない', async () => {
+    const { getSeries } = await loadStore();
+    const pairs = [
+      { original: 'RED HULK', translated: 'レッドハルク' },
+      { original: 'TONY STARK', translated: 'トニー・スターク' },
+    ];
+    seedSeries('dup01', []);
+    await record('dup01', pairs);
+    // 2 回目も 60 秒ガードを避ける
+    _store['series:dup01'].stats.lastTranslatedAt = OLD;
+    await record('dup01', pairs, 1);
+
+    const series = await getSeries('dup01');
+    expect(series.recentPairs).toHaveLength(2);
+  });
+
+  it('original が同じで訳文が違えば別ペアとして積む', async () => {
+    const { getSeries } = await loadStore();
+    seedSeries('dup02', []);
+    await record('dup02', [{ original: 'HULK', translated: 'ハルク' }]);
+    _store['series:dup02'].stats.lastTranslatedAt = OLD;
+    await record('dup02', [{ original: 'HULK', translated: 'ハルク（緑）' }]);
+
+    const series = await getSeries('dup02');
+    expect(series.recentPairs).toHaveLength(2);
+  });
+
+  // サンプリングの前に重複を落とさないと、既知 10 件に埋もれて新規が取りこぼされる
+  it('既知ペアが 1 ページ分の枠を埋めていても新規ペアは記録される', async () => {
+    const { getSeries } = await loadStore();
+    // カタカナを含む既知 10 件（サンプリング優先度が高い＝新規を押し出す側）
+    const known = Array.from({ length: 10 }, (_, i) => ({
+      original: `KNOWN ${i}`,
+      translated: `ノウン${i}`,
+      at: OLD,
+    }));
+    seedSeries('dup03', [...known]);
+
+    await record('dup03', [
+      ...known.map((p) => ({ original: p.original, translated: p.translated })),
+      { original: 'BRAND NEW', translated: 'ブランニュー' },
+      { original: 'ANOTHER ONE', translated: 'アナザーワン' },
+    ]);
+
+    const series = await getSeries('dup03');
+    const originals = series.recentPairs.map((p) => p.original);
+    expect(originals).toContain('BRAND NEW');
+    expect(originals).toContain('ANOTHER ONE');
+    expect(series.recentPairs).toHaveLength(12);
+  });
+
+  // 新規が無いのに失敗カウンタをリセットすると、失敗する抽出を無限に再試行する
+  it('新規ペアが無ければ extractionFailures をリセットしない', async () => {
+    const { getSeries } = await loadStore();
+    const existing20 = Array.from({ length: 20 }, (_, i) => ({
+      original: `term${i}`, translated: `ノウン${i}`, at: OLD,
+    }));
+    seedSeries('dup04', [...existing20], { extractionDue: true, extractionFailures: 2 });
+
+    await record('dup04', existing20.map((p) => ({ original: p.original, translated: p.translated })));
+
+    const series = await getSeries('dup04');
+    expect(series.recentPairs).toHaveLength(20);
+    expect(series.extractionFailures).toBe(2);
+  });
+});
+
+// ============================================================
 // Phase 4: acquireExtractionLock
 // ============================================================
 describe('acquireExtractionLock', () => {

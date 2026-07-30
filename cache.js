@@ -5,6 +5,9 @@ import { normalizeImageUrl, isSessionOnlyUrl } from './utils/url-utils.js';
 const CACHE_TTL = 30 * 24 * 60 * 60 * 1000; // 30日
 const CACHE_VERSION = '1.1';
 
+// ストレージ圧迫とみなすバイト数（QUOTA_BYTES 10 MB の 80%）
+const CACHE_PRESSURE_BYTES = 8 * 1024 * 1024;
+
 // 翻訳結果に影響する設定キー（変更時に古いキャッシュを削除）
 export const CACHE_AFFECTING_KEYS = ['apiProvider', 'geminiModel', 'claudeModel', 'openaiModel', 'ollamaModel', 'targetLang'];
 
@@ -60,17 +63,22 @@ export async function saveCachedTranslation(imageUrl, targetLang, translations, 
     await storage.set({ [cacheKey]: cacheData });
     if (!isSessionOnlyUrl(imageUrl)) {
       const usage = await chrome.storage.local.getBytesInUse();
-      if (usage > 8 * 1024 * 1024) await cleanOldCache();
+      if (usage > CACHE_PRESSURE_BYTES) await cleanOldCache();
     }
   } catch {
     if (!isSessionOnlyUrl(imageUrl)) {
-      await cleanOldCache();
+      // 書き込み自体が失敗した＝空きが足りない。圧迫の再計測を待たずに空けにいく
+      await cleanOldCache({ force: true });
       try { await chrome.storage.local.set({ [cacheKey]: cacheData }); } catch { /* 諦める */ }
     }
   }
 }
 
-export async function cleanOldCache() {
+/**
+ * 翻訳キャッシュを整理する。
+ * @param {{ force?: boolean }} [options] force:true で圧迫の有無に関係なく古い半分を削除
+ */
+export async function cleanOldCache({ force = false } = {}) {
   try {
     const allData = await chrome.storage.local.get(null);
     const cacheEntries = Object.keys(allData)
@@ -86,7 +94,18 @@ export async function cleanOldCache() {
       await chrome.storage.local.remove([...expiredKeys]);
     }
 
-    // TTL超過削除後もストレージ圧迫が続く場合に備えて残りの古い半分を削除
+    // TTL 削除だけで圧迫が解消したなら、まだ有効なキャッシュは残す。
+    // 以前は無条件に古い半分を消していたため、targetLang やモデルを切り替えるたびに
+    // 切り替え先とは無関係の有効なキャッシュまで半減し、読み直すたび再課金していた。
+    // 測定できなかった場合も削除しない（消し過ぎより残し過ぎを選ぶ。書き込み失敗時は
+    // 呼び出し側が force:true を渡す）
+    if (!force) {
+      let usage = 0;
+      try { usage = await chrome.storage.local.getBytesInUse(); } catch { usage = 0; }
+      if (usage <= CACHE_PRESSURE_BYTES) return;
+    }
+
+    // 圧迫が続く場合の最終手段として残りの古い半分を削除
     const remaining = cacheEntries
       .filter(e => !expiredKeys.has(e.key))
       .sort((a, b) => a.timestamp - b.timestamp);

@@ -238,25 +238,48 @@ export async function recordSeriesTranslation({ seriesId, name, detectionSource,
  * @param {Array<{original: string, translated: string}>} pairs 生の翻訳ペア
  */
 function appendRecentPairs(series, pairs) {
+  const list = Array.isArray(series.recentPairs) ? series.recentPairs : [];
+  series.recentPairs = list;
   if (!Array.isArray(pairs) || pairs.length === 0) return;
+
+  // 翻訳キャッシュが効くようになったため、同じページを読み直すとキャッシュから
+  // 同一の pairs が返る。sampleRecentPairs は決定的なので、ここで弾かないと
+  // まったく同じ 10 件が繰り返し積まれ、EXTRACTION_THRESHOLD が重複だけで埋まって
+  // Nano 抽出が空回りする。
+  // ※ サンプリングより先に落とすこと。後にすると既知ペアが 1 ページ分の枠を
+  //   埋めてしまい、同じページに混じっている新規の固有名詞が抽出に届かない
+  const seen = new Set(list.map(pairKey));
+  const fresh = [];
+  for (const p of pairs) {
+    if (!p || typeof p.original !== 'string' || typeof p.translated !== 'string') continue;
+    const key = pairKey(p);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    fresh.push(p);
+  }
+  // 新規が無ければ extractionDue も失敗カウンタも触らない。材料が増えていないのに
+  // extractionFailures をリセットすると、失敗する抽出を無限に再試行してしまう
+  if (fresh.length === 0) return;
+
   // 1 翻訳あたりの記録数。5 だと 1 ページ 20 個の吹き出しの 4 分の 1 しか
   // 抽出に届かず、固有名詞を取りこぼしていた（実機で確認）
-  const sampled = sampleRecentPairs(pairs, PAIRS_PER_TRANSLATION);
-  const list = Array.isArray(series.recentPairs) ? series.recentPairs : [];
+  const sampled = sampleRecentPairs(fresh, PAIRS_PER_TRANSLATION);
   const now = Date.now();
   for (const p of sampled) {
-    if (p && typeof p.original === 'string' && typeof p.translated === 'string') {
-      list.push({ original: p.original, translated: p.translated, at: now });
-    }
+    list.push({ original: p.original, translated: p.translated, at: now });
   }
   if (list.length > RECENT_PAIRS_MAX) {
     list.splice(0, list.length - RECENT_PAIRS_MAX);
   }
-  series.recentPairs = list;
   if (list.length >= EXTRACTION_THRESHOLD) {
     series.extractionDue = true;
     series.extractionFailures = 0; // 新規ペア追加で失敗カウンタリセット
   }
+}
+
+/** recentPairs の同一性キー。NUL 区切りで original と translated の境界を曖昧にしない */
+function pairKey(p) {
+  return `${p.original}\u0000${p.translated}`;
 }
 
 // ============================================================
