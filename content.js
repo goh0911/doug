@@ -508,7 +508,10 @@ JSON配列のみ返してください:
     bar.appendChild(fill);
     parent.appendChild(bar);
 
-    document.getElementById('mut-btn-translate').addEventListener('click', translateCurrentPage);
+    // 関数参照をそのまま渡すと第1引数に MouseEvent が入り、forceRefresh が常に真になる。
+    // その結果、翻訳ボタンからの翻訳はキャッシュを一切使わず毎回 API を呼んでいた。
+    // 強制再翻訳は別途 mut-reload-btn（translateCurrentPage(true)）が担当する
+    document.getElementById('mut-btn-translate').addEventListener('click', () => translateCurrentPage());
     document.getElementById('mut-btn-auto').addEventListener('click', toggleAutoTranslate);
     document.getElementById('mut-btn-toggle').addEventListener('click', toggleOverlays);
     document.getElementById('mut-btn-clear').addEventListener('click', clearOverlays);
