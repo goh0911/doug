@@ -36,7 +36,7 @@ function listHeadings(extract) {
  * @param {string} seriesName 検出済みシリーズ名（空可）
  * @returns {string|null} 原語が空なら null
  */
-export function buildSearchUrl(term, seriesName) {
+export function buildSearchUrl(term, seriesName, { maxlag } = {}) {
   // 二重引用符はフレーズ検索の区切りに使うため入力側から除去する
   const t = String(term ?? '').split('"').join('').trim();
   if (t === '') return null;
@@ -53,6 +53,9 @@ export function buildSearchUrl(term, seriesName) {
     redirects: '1',
     format: 'json',
   });
+  // 非対話（先読み）の呼び出しには maxlag を付ける（MediaWiki の推奨）。
+  // DB 遅延時は HTTP 200 + error:maxlag が返り、isTransientApiError が一時的失敗として拾う
+  if (Number.isFinite(maxlag) && maxlag > 0) params.set('maxlag', String(maxlag));
   // URLSearchParams は空白を + に変換するが、テストは decodeURIComponent 後に空白を期待するため %20 に置換
   return `${API_ENDPOINT}?${params.toString().replace(/\+/g, '%20')}`;
 }
@@ -198,8 +201,11 @@ export function termAppearsIn(term, title, intro) {
   const t = normalizeForMatch(term);
   if (t === '') return false;
 
-  // タイトルは記事の正規表記なので、記号を落とした形で照合してよい
-  if (containsWord(normalizeTitleForMatch(title), t)) return true;
+  // タイトルが検索語そのものなら、それだけで記事の同一性の根拠になる。
+  // 一方「タイトルに語が含まれるだけ」は根拠にならない（PARKER に対する Peter Parker）。
+  // 実記事フィクスチャで確認したところ、従来タイトル部分一致で通っていた記事は
+  // すべて導入節でも裏付けが取れたため、部分一致は根拠から外す（Codex 指摘 #1）
+  if (isExactTitleMatch(term, title)) return true;
 
   // 照合範囲は「最初の文の主語部分」まで。段落全体だと、記事の主題ではない語に
   // 一致してしまう（実測: UNITED STATES MILITARY → Father Time の記事、
@@ -276,6 +282,7 @@ export function passesGate(parts) {
   if (typeof intro !== 'string' || intro.length < INTRO_MIN_LENGTH) return false;
   if (!/comic/i.test(intro)) return false;
   if (isNonEntityArticle(title)) return false;
+  if (isDisambiguationPage(intro)) return false;
   if (publisherConflicts(intro, publisher, title)) return false;
   return termAppearsIn(term, title, intro);
 }
@@ -343,15 +350,20 @@ export function publisherConflicts(intro, publisher, title = '') {
     if (other && !expected.pattern.test(paren[1])) return true;
   }
 
-  // 「最初の published by だけを見る」と、移管・共同出版のキャラクターを誤って落とす
-  // （例: originally published by Charlton Comics → later published by DC Comics）。
+  // 「最初の published by だけを見る」と、共同出版のキャラクターを誤って落とす。
   // 期待出版社が導入節のどこかに現れるなら矛盾なしとする
   const text = String(intro ?? '');
   if (expected.pattern.test(text)) return false;
 
-  // 期待出版社がどこにも現れず、別の既知出版社を名乗っているときだけ却下する。
+  // 「originally published by X」は来歴であって現在の帰属ではない。ここで却下すると
+  // 移管キャラクターの解説が出なくなる（実記事: Peter Cannon, Thunderbolt の導入節は
+  // "originally published by Charlton Comics" のみで、後の DC には触れていない）。
+  // 一方 Reggie Mantle は "published by Archie Comics" と現在形なので却下対象のまま
+  const current = text.replace(/\b(?:originally|formerly|initially|first)\s+published by[^.;]*/gi, ' ');
+
+  // 期待出版社がどこにも現れず、別の既知出版社を現在の帰属として名乗っているときだけ却下する。
   // 出版社に一切触れない記事（組織・場所など）は従来どおり通す
-  return PUBLISHERS.some((p) => p.key !== publisher && p.pattern.test(text));
+  return PUBLISHERS.some((p) => p.key !== publisher && p.pattern.test(current));
 }
 
 /**
@@ -387,6 +399,17 @@ export function isTransientApiError(json) {
  * どちらも「その語の解説」にならないので落とす。
  * 「(comics)」「(Marvel Comics)」はキャラクター記事の曖昧さ回避なので除外しない。
  */
+/**
+ * 曖昧さ回避ページか。「X may refer to:」で始まり、候補が箇条書きされるだけの記事で、
+ * どの語の解説にもならない（実記事: "Peter Cannon may refer to:" が
+ * 出版社の記述を含むためゲートを通り得た）。
+ * @param {string} intro
+ * @returns {boolean}
+ */
+export function isDisambiguationPage(intro) {
+  return /\bmay (?:also )?refer to\s*:/i.test(String(intro ?? ''));
+}
+
 function isNonEntityArticle(title) {
   const t = String(title ?? '');
   if (/^list of /i.test(t.trim())) return true;

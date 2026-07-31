@@ -1,6 +1,6 @@
 // tests/unit/gloss-policy.test.js
 import { describe, it, expect } from 'vitest';
-import { planGlossGeneration, seriesNameAttempts, acceptsNonExactTitle } from '../../utils/gloss-policy.js';
+import { planGlossGeneration, seriesNameAttempts, acceptsNonExactTitle, retryAfterMs } from '../../utils/gloss-policy.js';
 
 describe('planGlossGeneration — 課金ゲート', () => {
   it('先読み（nanoOnly）では有料 API を呼ばない', () => {
@@ -80,5 +80,34 @@ describe('acceptsNonExactTitle', () => {
   it('空白・引用符だけのシリーズ名も「なし」とみなす（buildSearchUrl と同じ正規化）', () => {
     expect(acceptsNonExactTitle('   ')).toBe(true);
     expect(acceptsNonExactTitle('""')).toBe(true);
+  });
+});
+
+
+// ============================================================
+// レート制限後の待機
+// 実測: 429 に巻き込まれた際、17 語が一斉に再試行して同一 origin を再度圧迫した。
+// 失敗をキャッシュしなくなった分、待機を置かないと再試行圧が上がる（Codex 指摘 #4）
+// ============================================================
+describe('retryAfterMs', () => {
+  it('Retry-After（秒）を尊重する', () => {
+    expect(retryAfterMs('30')).toBe(30_000);
+    expect(retryAfterMs('1')).toBe(1_000);
+  });
+
+  it('ヘッダが無い・不正なら既定値を使う', () => {
+    expect(retryAfterMs(null)).toBe(60_000);
+    expect(retryAfterMs('')).toBe(60_000);
+    expect(retryAfterMs('soon')).toBe(60_000);
+    expect(retryAfterMs('-5')).toBe(60_000);
+    expect(retryAfterMs('0')).toBe(60_000);
+  });
+
+  it('過大な値は上限で頭打ちにする（無期限に機能を止めない）', () => {
+    expect(retryAfterMs('99999')).toBe(10 * 60_000);
+  });
+
+  it('既定値は呼び出し側で変えられる', () => {
+    expect(retryAfterMs(null, 5_000)).toBe(5_000);
   });
 });

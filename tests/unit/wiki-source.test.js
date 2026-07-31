@@ -466,3 +466,23 @@ describe('一時的失敗の判定（24 時間の失敗キャッシュに焼き�
     expect(isTransientApiError(undefined)).toBe(false);
   });
 });
+
+
+describe('buildSearchUrl — maxlag', () => {
+  // 非対話（先読み）の呼び出しでは maxlag を付けるのが MediaWiki の推奨。
+  // DB 遅延時は HTTP 200 + error:maxlag が返り、isTransientApiError が拾う
+  it('maxlag を指定すると URL に載る', () => {
+    const url = decodeURIComponent(buildSearchUrl('Hulk', 'Immortal Hulk', { maxlag: 5 }));
+    expect(url).toContain('maxlag=5');
+  });
+
+  it('指定しなければ付かない（対話的な hover 経路では待たせない）', () => {
+    expect(decodeURIComponent(buildSearchUrl('Hulk', 'Immortal Hulk'))).not.toContain('maxlag');
+    expect(decodeURIComponent(buildSearchUrl('Hulk', 'Immortal Hulk', {}))).not.toContain('maxlag');
+  });
+
+  it('不正な値は無視する', () => {
+    expect(decodeURIComponent(buildSearchUrl('Hulk', '', { maxlag: 0 }))).not.toContain('maxlag');
+    expect(decodeURIComponent(buildSearchUrl('Hulk', '', { maxlag: 'x' }))).not.toContain('maxlag');
+  });
+});

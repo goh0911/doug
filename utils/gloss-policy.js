@@ -60,3 +60,21 @@ export function seriesNameAttempts(seriesName) {
 export function acceptsNonExactTitle(attempt) {
   return String(attempt ?? '').split('"').join('').trim() === '';
 }
+
+/**
+ * レート制限（429/503）に当たったあと、この origin へ再び投げるまでの待機ミリ秒。
+ *
+ * 一時的失敗を失敗キャッシュに焼き付けなくなった分、待機を置かないと再試行圧が上がる。
+ * 実測: 429 に巻き込まれた際、1 バッチ 17 語が一斉に同じ origin を叩いていた。
+ * 上限を設けるのは、極端な Retry-After で機能を無期限に止めないため。
+ *
+ * @param {string|null} header Retry-After ヘッダ（秒数形式のみ解釈する）
+ * @param {number} fallbackMs ヘッダが無い・不正なときの待機
+ * @param {number} maxMs 待機の上限
+ * @returns {number}
+ */
+export function retryAfterMs(header, fallbackMs = 60_000, maxMs = 10 * 60_000) {
+  const s = parseInt(header, 10);
+  if (Number.isFinite(s) && s > 0) return Math.min(s * 1000, maxMs);
+  return fallbackMs;
+}

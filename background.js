@@ -29,7 +29,7 @@ import {
 import { buildGlossPrompt, parseGlossResponse } from './utils/gloss-summary.js';
 import { sanitizePairForNano, parseCandidatesJson, buildExtractionPrompt } from './utils/nano-extract.js';
 import { isUsable } from './utils/gloss-cache.js';
-import { planGlossGeneration, seriesNameAttempts, acceptsNonExactTitle } from './utils/gloss-policy.js';
+import { planGlossGeneration, seriesNameAttempts, acceptsNonExactTitle, retryAfterMs } from './utils/gloss-policy.js';
 
 // ============================================================
 // マイグレーション: sync → local への移行
@@ -321,6 +321,8 @@ const GLOSS_NANO_TIMEOUT_MS = 60_000;
 const GLOSS_CONCURRENCY = 3;            // R-W10: 1 記事平均 35 KB のため絞る
 // glossary は 2KB 上限で実質 30 語弱に収まる。1 リクエストあたりの fetch/LLM 呼び出し回数の上限（レビュー Important 1）
 const GLOSS_MAX_TERMS_PER_RUN = 30;
+// 先読み（非対話）で付ける maxlag（秒）。MediaWiki が非対話処理に推奨
+const GLOSS_PREFETCH_MAXLAG = 5;
 
 // 同一 (seriesId, lang) の先読みを二重に走らせないためのロック
 const glossInFlight = new Map();
@@ -337,10 +339,17 @@ function glossUserAgent() {
 const QUERY_MISS = { status: 'miss', hit: null };
 const QUERY_TRANSIENT = { status: 'transient', hit: null };
 
+// レート制限に当たったあと、この時刻までは Wikipedia へ投げない。
+// 一時的失敗をキャッシュしなくなった分、待機が無いと 1 バッチ最大 30 語が
+// 一斉に再試行して同じ origin を再度圧迫する（Codex 指摘 #4）
+let glossFetchCooldownUntil = 0;
+
 /** 検索クエリ 1 本を実行する。@returns {{status:'ok'|'miss'|'transient', hit:object|null}} */
-async function tryWikipediaQuery(term, seriesName, publisher) {
-  const url = buildSearchUrl(term, seriesName);
+async function tryWikipediaQuery(term, seriesName, publisher, opts = {}) {
+  const url = buildSearchUrl(term, seriesName, opts);
   if (!url) return QUERY_MISS;
+  // クールダウン中は投げない。失敗ではなく「今回は試さなかった」なのでキャッシュもしない
+  if (Date.now() < glossFetchCooldownUntil) return QUERY_TRANSIENT;
 
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), GLOSS_FETCH_TIMEOUT_MS);
@@ -353,7 +362,9 @@ async function tryWikipediaQuery(term, seriesName, publisher) {
     if (!res.ok) {
       // ステータスを捨てると 429 と 404 の区別が後から一切つかない
       console.debug('[gloss] Wikipedia HTTP', res.status, term);
-      return isTransientHttpStatus(res.status) ? QUERY_TRANSIENT : QUERY_MISS;
+      if (!isTransientHttpStatus(res.status)) return QUERY_MISS;
+      glossFetchCooldownUntil = Date.now() + retryAfterMs(res.headers.get('Retry-After'));
+      return QUERY_TRANSIENT;
     }
     json = await res.json();
   } catch {
@@ -366,6 +377,8 @@ async function tryWikipediaQuery(term, seriesName, publisher) {
   // maxlag / readonly / ratelimited は HTTP 200 で返るため res.ok を素通りする
   if (isTransientApiError(json)) {
     console.debug('[gloss] Wikipedia API error', json.error.code, term);
+    // maxlag は DB 遅延の解消を待つだけでよいので、レート制限より短く見積もる
+    glossFetchCooldownUntil = Date.now() + retryAfterMs(null, 5_000);
     return QUERY_TRANSIENT;
   }
 
@@ -398,7 +411,7 @@ async function tryWikipediaQuery(term, seriesName, publisher) {
  * "Vision" comics → Scarlet Witch のように **ゲートを通る別人** を引くことがあり、
  * シリーズ名付きを先に試すからこそフォールバックが安全に成立する。
  */
-async function fetchWikipediaEntry(term, seriesName, publisher) {
+async function fetchWikipediaEntry(term, seriesName, publisher, opts = {}) {
   // 試す順序は utils/gloss-policy.js の seriesNameAttempts が決める（テスト可能にするため）。
   // 先勝ちにせず、タイトルが検索語そのものの結果を優先する。1 語の姓は曖昧で、
   // シリーズ名つきの検索が同姓の別人を 1 位に返すことがある
@@ -407,7 +420,7 @@ async function fetchWikipediaEntry(term, seriesName, publisher) {
   // （acceptsNonExactTitle。この条件が無いと上の Brian Banner がそのまま採用される）
   let fallback = null;
   for (const attempt of seriesNameAttempts(seriesName)) {
-    const r = await tryWikipediaQuery(term, attempt, publisher);
+    const r = await tryWikipediaQuery(term, attempt, publisher, opts);
     // レート制限中に 2 本目を撃っても状況を悪化させるだけなので即座に打ち切る
     if (r.status === 'transient') return { material: null, transient: true };
     if (r.status !== 'ok') continue;
@@ -467,6 +480,11 @@ const wikipediaSource = {
 
 const GLOSS_SOURCES = [wikipediaSource];
 
+/** URL からホスト名を取り出す（取れなければ空文字） */
+function hostOf(url) {
+  try { return new URL(url).hostname; } catch { return ''; }
+}
+
 /** シリーズの urlPatterns から最後に見たホスト名を取り出す（無ければ空文字） */
 function seriesHost(series) {
   const patterns = Array.isArray(series && series.urlPatterns) ? series.urlPatterns : [];
@@ -480,12 +498,12 @@ function seriesHost(series) {
  * 素材が無い場合、それが一時的失敗だったかを transient で伝える（失敗キャッシュの判断に使う）
  * @returns {{ material: object|null, transient: boolean }}
  */
-async function fetchFromSources(term, seriesName, publisher) {
+async function fetchFromSources(term, seriesName, publisher, opts = {}) {
   let transient = false;
   for (const source of GLOSS_SOURCES) {
     const granted = await chrome.permissions.contains({ origins: [source.origin] }).catch(() => false);
     if (!granted) continue;
-    const r = await source.fetchEntry(term, seriesName, publisher);
+    const r = await source.fetchEntry(term, seriesName, publisher, opts);
     if (r && r.material) return { material: { ...r.material, sourceId: source.id }, transient: false };
     if (r && r.transient) transient = true;
   }
@@ -503,7 +521,9 @@ async function fetchFromSources(term, seriesName, publisher) {
  */
 async function buildGlossEntry(term, seriesName, langLabel, nanoOnly = false, publisher = null) {
   const now = Date.now();
-  const { material, transient } = await fetchFromSources(term, seriesName, publisher);
+  // 先読み（非対話）だけ maxlag を付ける。hover 経路で付けると DB 遅延時に無応答になる
+  const { material, transient } = await fetchFromSources(term, seriesName, publisher,
+    nanoOnly ? { maxlag: GLOSS_PREFETCH_MAXLAG } : {});
   if (!material) {
     // 一時的失敗（レート制限・通信断・maxlag）は「今回は試さなかった」扱いにして
     // 24 時間の失敗キャッシュに焼き付けない。null は呼び出し側が保存せず次回再試行する
@@ -557,7 +577,7 @@ async function mapWithConcurrency(items, limit, worker) {
  * @param {boolean} nanoOnly true のとき先読み専用モード（Nano のみ・有料 API 不可）で生成する
  * @returns {Promise<object>} { 原語: { identity, powers, url } }。失敗語は含めない
  */
-async function resolveGlossDefs({ seriesId, seriesName, terms, targetLang, langLabel, nanoOnly = false }) {
+async function resolveGlossDefs({ seriesId, seriesName, terms, targetLang, langLabel, nanoOnly = false, host = '' }) {
   const lockKey = `${seriesId}:${targetLang}`;
   // 直前の実行が入れ替わる直前まで Map から見えるようにチェーンする。
   // await の後に別呼び出しが割り込んでも、同じ prev を待った全員が
@@ -598,7 +618,10 @@ async function resolveGlossDefs({ seriesId, seriesName, terms, targetLang, langL
           // 閲覧中のサイトから期待される出版社を引き、検証ゲートに渡す。
           // 別出版社の同名キャラを落とすため（実測: Immortal Hulk の「レジー」に
           // Archie Comics の Reggie Mantle の解説が出ていた）。未知サイトは null＝条件なし
-          const publisher = expectedPublisher(seriesHost(seriesExists));
+          // 出版社は「今まさに閲覧しているタブ」から引く。保存済みの urlPatterns は
+          // 最後に見たホストでしかなく、ミラーや別ストアで読むと実際の閲覧元とずれる
+          // （Codex 指摘）。sender.tab が取れない場合だけ保存済みホストに落とす
+          const publisher = expectedPublisher(host || seriesHost(seriesExists));
           await mapWithConcurrency(missing, GLOSS_CONCURRENCY, async (term) => {
             const entry = await buildGlossEntry(term, seriesName, langLabel, nanoOnly, publisher)
               .catch(() => ({ failed: true, at: now }));
@@ -936,6 +959,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         targetLang: message.targetLang,
         langLabel: message.langLabel,
         nanoOnly: true,
+        host: hostOf(sender.tab && sender.tab.url),
       }).catch(() => { /* 失敗は表示しない（設計書 §10） */ });
       sendResponse({ started: true });
       return;
@@ -955,6 +979,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           targetLang: message.targetLang,
           langLabel: message.langLabel,
           nanoOnly: false,
+          host: hostOf(sender.tab && sender.tab.url),
         });
         sendResponse({ defs });
       } catch {
