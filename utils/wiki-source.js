@@ -264,17 +264,68 @@ function stripHeadings(text) {
  * 全部落ちるため。人物なら powers を、組織・場所なら intro だけを解説に使う。
  * 品質の担保は termAppearsIn（記事の同一性）と導入節の長さに移している。
  *
- * @param {{ term?: string, title?: string, intro?: string, powers?: string }} parts
+ * @param {{ term?: string, title?: string, intro?: string, powers?: string, publisher?: string }} parts
+ *   publisher: 閲覧中のサイトから期待される出版社キー（expectedPublisher の戻り値）。
+ *   省略時は出版社を条件にしない（後方互換）
  * @returns {boolean}
  */
 export function passesGate(parts) {
   if (!parts || typeof parts !== 'object') return false;
-  const { term, title, intro, powers } = parts;
+  const { term, title, intro, powers, publisher } = parts;
   if (typeof powers !== 'string') return false;
   if (typeof intro !== 'string' || intro.length < INTRO_MIN_LENGTH) return false;
   if (!/comic/i.test(intro)) return false;
   if (isNonEntityArticle(title)) return false;
+  if (publisherConflicts(intro, publisher)) return false;
   return termAppearsIn(term, title, intro);
+}
+
+/**
+ * 既知の出版社。ホスト名と、導入節の "published by …" に現れる表記の対応。
+ * 旧社名・傘下レーベルも同じ出版社として扱う（Timely / Atlas は Marvel の前身、
+ * Vertigo / Wildstorm は DC のインプリント）
+ */
+const PUBLISHERS = [
+  { key: 'marvel', hosts: ['marvel.com'], pattern: /marvel|timely|atlas\s+comics/i },
+  { key: 'dc', hosts: ['dc.com', 'dcuniverseinfinite.com', 'readdc.com'], pattern: /\bDC\b|vertigo|wildstorm/i },
+];
+
+/**
+ * 閲覧中のホストから期待される出版社キーを返す。未知なら null（条件を課さない）。
+ * @param {string} host location.hostname 相当
+ * @returns {string|null}
+ */
+export function expectedPublisher(host) {
+  const h = String(host ?? '').toLowerCase().trim();
+  if (h === '') return null;
+  for (const p of PUBLISHERS) {
+    // 完全一致かサブドメイン一致のみ。marvel.com.example.net を通さない
+    if (p.hosts.some((d) => h === d || h.endsWith(`.${d}`))) return p.key;
+  }
+  return null;
+}
+
+/**
+ * 導入節が名乗る出版社が、期待する出版社と食い違うか。
+ *
+ * 実測（2026-07-31）: "REGGIE" comics → Reggie Mantle（Archie Comics）が
+ * ゲートを通り、Immortal Hulk の「レジー」の解説として表示されていた。
+ * 別宇宙の同名キャラを落とすのがこの条件の目的。
+ *
+ * 記載が無い場合は却下しない。必須にすると S.H.I.E.L.D.（組織）や
+ * Gamma Base（場所）のように出版社を書かない記事が軒並み消える。
+ *
+ * @param {string} intro
+ * @param {string|null} publisher expectedPublisher の戻り値
+ * @returns {boolean}
+ */
+export function publisherConflicts(intro, publisher) {
+  if (!publisher) return false;
+  const expected = PUBLISHERS.find((p) => p.key === publisher);
+  if (!expected) return false;
+  const m = String(intro ?? '').match(/published by ([^.;]+)/i);
+  if (!m) return false;
+  return !expected.pattern.test(m[1]);
 }
 
 /**

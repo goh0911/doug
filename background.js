@@ -23,12 +23,12 @@ import { derivePathPrefix } from './utils/url-pattern.js';
 import { buildSeriesDetectionPrompt, parseSeriesDetectionResponse } from './utils/series-nano.js';
 import {
   WIKIPEDIA_ORIGIN, SOURCE_ID, buildSearchUrl, parseSearchResponse,
-  extractIntro, extractPowers, passesGate, buildPageUrl, isExactTitleMatch,
+  extractIntro, extractPowers, passesGate, buildPageUrl, isExactTitleMatch, expectedPublisher,
 } from './utils/wiki-source.js';
 import { buildGlossPrompt, parseGlossResponse } from './utils/gloss-summary.js';
 import { sanitizePairForNano, parseCandidatesJson, buildExtractionPrompt } from './utils/nano-extract.js';
 import { isUsable } from './utils/gloss-cache.js';
-import { planGlossGeneration, seriesNameAttempts } from './utils/gloss-policy.js';
+import { planGlossGeneration, seriesNameAttempts, acceptsNonExactTitle } from './utils/gloss-policy.js';
 
 // ============================================================
 // マイグレーション: sync → local への移行
@@ -331,7 +331,7 @@ function glossUserAgent() {
 }
 
 /** 検索クエリ 1 本を実行し、ゲートを通れば素材を返す。通らなければ null */
-async function tryWikipediaQuery(term, seriesName) {
+async function tryWikipediaQuery(term, seriesName, publisher) {
   const url = buildSearchUrl(term, seriesName);
   if (!url) return null;
 
@@ -358,7 +358,7 @@ async function tryWikipediaQuery(term, seriesName) {
   const powers = extractPowers(page.extract);
   // 誤ったページを黙って採用しないための唯一の関門（設計書 §1.2）。
   // term / title を渡さないと記事の同一性を検証できない（別人の解説が出る）
-  if (!passesGate({ term, title: page.title, intro, powers })) return null;
+  if (!passesGate({ term, title: page.title, intro, powers, publisher })) return null;
 
   return { title: page.title, url: buildPageUrl(page.title), intro, powers };
 }
@@ -378,17 +378,19 @@ async function tryWikipediaQuery(term, seriesName) {
  * "Vision" comics → Scarlet Witch のように **ゲートを通る別人** を引くことがあり、
  * シリーズ名付きを先に試すからこそフォールバックが安全に成立する。
  */
-async function fetchWikipediaEntry(term, seriesName) {
+async function fetchWikipediaEntry(term, seriesName, publisher) {
   // 試す順序は utils/gloss-policy.js の seriesNameAttempts が決める（テスト可能にするため）。
   // 先勝ちにせず、タイトルが検索語そのものの結果を優先する。1 語の姓は曖昧で、
   // シリーズ名つきの検索が同姓の別人を 1 位に返すことがある
-  // （実測: "BANNER" Immortal Hulk comics → Brian Banner＝ブルースの父）
+  // （実測: "BANNER" Immortal Hulk comics → Brian Banner＝ブルースの父）。
+  // 完全一致でない結果を採用してよいのはシリーズ名なし検索のときだけ
+  // （acceptsNonExactTitle。この条件が無いと上の Brian Banner がそのまま採用される）
   let fallback = null;
   for (const attempt of seriesNameAttempts(seriesName)) {
-    const hit = await tryWikipediaQuery(term, attempt);
+    const hit = await tryWikipediaQuery(term, attempt, publisher);
     if (!hit) continue;
     if (isExactTitleMatch(term, hit.title)) return hit;
-    if (!fallback) fallback = hit;
+    if (!fallback && acceptsNonExactTitle(attempt)) fallback = hit;
   }
   return fallback;
 }
@@ -437,17 +439,25 @@ async function generateGlossWithApi(prompt, term) {
 const wikipediaSource = {
   id: SOURCE_ID,
   origin: WIKIPEDIA_ORIGIN,
-  fetchEntry: fetchWikipediaEntry,   // (term, seriesName) => { title, url, intro, powers } | null
+  fetchEntry: fetchWikipediaEntry,   // (term, seriesName, publisher) => { title, url, intro, powers } | null
 };
 
 const GLOSS_SOURCES = [wikipediaSource];
 
+/** シリーズの urlPatterns から最後に見たホスト名を取り出す（無ければ空文字） */
+function seriesHost(series) {
+  const patterns = Array.isArray(series && series.urlPatterns) ? series.urlPatterns : [];
+  if (patterns.length === 0) return '';
+  const latest = patterns.reduce((a, b) => ((b.lastSeenAt ?? 0) > (a.lastSeenAt ?? 0) ? b : a));
+  try { return new URL(latest.origin).hostname; } catch { return ''; }
+}
+
 /** 全ソースを順に試し、最初に素材を返したものを採用する */
-async function fetchFromSources(term, seriesName) {
+async function fetchFromSources(term, seriesName, publisher) {
   for (const source of GLOSS_SOURCES) {
     const granted = await chrome.permissions.contains({ origins: [source.origin] }).catch(() => false);
     if (!granted) continue;
-    const material = await source.fetchEntry(term, seriesName);
+    const material = await source.fetchEntry(term, seriesName, publisher);
     if (material) return { ...material, sourceId: source.id };
   }
   return null;
@@ -462,9 +472,9 @@ async function fetchFromSources(term, seriesName) {
  *   Nano が使えず生成できなかった場合は null を返す（=「失敗」としてキャッシュしない。
  *   hover 時に nanoOnly=false で再試行できるようにするため。cf. isUsable の 24h 失敗キャッシュ）
  */
-async function buildGlossEntry(term, seriesName, langLabel, nanoOnly = false) {
+async function buildGlossEntry(term, seriesName, langLabel, nanoOnly = false, publisher = null) {
   const now = Date.now();
-  const material = await fetchFromSources(term, seriesName);
+  const material = await fetchFromSources(term, seriesName, publisher);
   if (!material) return { failed: true, at: now };
 
   const prompt = buildGlossPrompt({
@@ -551,8 +561,12 @@ async function resolveGlossDefs({ seriesId, seriesName, terms, targetLang, langL
           // （最終レビュー Important 3）。nanoOnly（先読み）で Nano が使えず生成できなかった語は
           // buildGlossEntry が null を返す。これは「失敗」ではなく「今回は試さなかった」なので
           // キャッシュに書かず missing のまま残し、hover 時の nanoOnly=false な再試行に委ねる
+          // 閲覧中のサイトから期待される出版社を引き、検証ゲートに渡す。
+          // 別出版社の同名キャラを落とすため（実測: Immortal Hulk の「レジー」に
+          // Archie Comics の Reggie Mantle の解説が出ていた）。未知サイトは null＝条件なし
+          const publisher = expectedPublisher(seriesHost(seriesExists));
           await mapWithConcurrency(missing, GLOSS_CONCURRENCY, async (term) => {
-            const entry = await buildGlossEntry(term, seriesName, langLabel, nanoOnly)
+            const entry = await buildGlossEntry(term, seriesName, langLabel, nanoOnly, publisher)
               .catch(() => ({ failed: true, at: now }));
             if (entry === null) return;
             cached[term] = entry;

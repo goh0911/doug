@@ -1,6 +1,6 @@
 // tests/unit/gloss-policy.test.js
 import { describe, it, expect } from 'vitest';
-import { planGlossGeneration, seriesNameAttempts } from '../../utils/gloss-policy.js';
+import { planGlossGeneration, seriesNameAttempts, acceptsNonExactTitle } from '../../utils/gloss-policy.js';
 
 describe('planGlossGeneration — 課金ゲート', () => {
   it('先読み（nanoOnly）では有料 API を呼ばない', () => {
@@ -49,5 +49,36 @@ describe('seriesNameAttempts — 検索の試行順', () => {
     // buildSearchUrl が二重引用符を除去するため、trim だけでは非空と誤判定する
     expect(seriesNameAttempts('"')).toEqual(['']);
     expect(seriesNameAttempts('""')).toEqual(['']);
+  });
+});
+
+
+// ============================================================
+// 非完全一致の記事を採用してよい検索はどれか
+// 実測（2026-07-31）:
+//   "BANNER" Immortal Hulk (2018) comics → Brian Banner [ゲート通過] ＝ ブルースの父（誤り）
+//   "BANNER" comics                      → Hulk         [ゲート却下]
+//   "ROSS"   Immortal Hulk (2018) comics → The Incredible Hulk (comic book) [却下]
+//   "ROSS"   comics                      → Thunderbolt Ross [通過] ＝ 正しい
+// シリーズ名つき検索は「作品の文脈で関連する記事」を返すため、タイトルが検索語
+// そのものでない結果は信用できない。シリーズ名なし検索の結果はその語の代表的存在に近い
+// ============================================================
+describe('acceptsNonExactTitle', () => {
+  it('シリーズ名なし検索の結果なら採用してよい', () => {
+    expect(acceptsNonExactTitle('')).toBe(true);
+  });
+
+  it('シリーズ名つき検索の結果は採用しない', () => {
+    expect(acceptsNonExactTitle('Immortal Hulk (2018)')).toBe(false);
+  });
+
+  it('null / undefined はシリーズ名なしとみなす', () => {
+    expect(acceptsNonExactTitle(null)).toBe(true);
+    expect(acceptsNonExactTitle(undefined)).toBe(true);
+  });
+
+  it('空白・引用符だけのシリーズ名も「なし」とみなす（buildSearchUrl と同じ正規化）', () => {
+    expect(acceptsNonExactTitle('   ')).toBe(true);
+    expect(acceptsNonExactTitle('""')).toBe(true);
   });
 });

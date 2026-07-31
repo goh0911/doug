@@ -41,3 +41,22 @@ export function seriesNameAttempts(seriesName) {
   const s = String(seriesName ?? '').split('"').join('').trim();
   return s === '' ? [''] : [seriesName, ''];
 }
+
+/**
+ * タイトルが検索語と完全一致しない記事を「その語の記事」として採用してよいか。
+ *
+ * シリーズ名つき検索は「その作品の文脈で関連する記事」を返すため、タイトルが
+ * 検索語そのものでない結果は信用できない。シリーズ名なし検索が返す記事は、
+ * その語の代表的存在に近い。実測（2026-07-31、Immortal Hulk (2018)）:
+ *   "BANNER" <series> comics → Brian Banner [ゲート通過] ＝ ブルースの父（誤り）
+ *   "BANNER" comics          → Hulk         [ゲート却下]
+ *   "ROSS"   <series> comics → The Incredible Hulk (comic book) [却下]
+ *   "ROSS"   comics          → Thunderbolt Ross [通過] ＝ 正しい
+ * 完全一致（HULK → Hulk）は呼び出し側が先に採用するので、ここには来ない。
+ *
+ * @param {string} attempt その結果を返した検索のシリーズ名（'' はシリーズ名なし）
+ * @returns {boolean}
+ */
+export function acceptsNonExactTitle(attempt) {
+  return String(attempt ?? '').split('"').join('').trim() === '';
+}

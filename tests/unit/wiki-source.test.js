@@ -3,6 +3,7 @@ import { describe, it, expect } from 'vitest';
 import {
   WIKIPEDIA_ORIGIN, buildSearchUrl, parseSearchResponse,
   extractIntro, extractPowers, passesGate, termAppearsIn, isExactTitleMatch, buildPageUrl,
+  expectedPublisher, publisherConflicts,
 } from '../../utils/wiki-source.js';
 
 describe('buildSearchUrl', () => {
@@ -280,5 +281,97 @@ describe('buildPageUrl', () => {
 describe('WIKIPEDIA_ORIGIN', () => {
   it('permissions.request に渡せる形式', () => {
     expect(WIKIPEDIA_ORIGIN).toBe('https://en.wikipedia.org/*');
+  });
+});
+
+
+// ============================================================
+// 出版社の裏付け
+// 実測（2026-07-31）: "REGGIE" comics → Reggie Mantle（Archie Comics）が
+// ゲートを通り、Immortal Hulk の「レジー」の解説として表示されていた。
+// 別宇宙・別出版社の同名キャラを落とすための条件
+// ============================================================
+describe('expectedPublisher', () => {
+  it('既知のホストから出版社を引く', () => {
+    expect(expectedPublisher('www.marvel.com')).toBe('marvel');
+    expect(expectedPublisher('marvel.com')).toBe('marvel');
+    expect(expectedPublisher('www.dc.com')).toBe('dc');
+    expect(expectedPublisher('dcuniverseinfinite.com')).toBe('dc');
+  });
+
+  it('未知のホストは null（条件を課さない）', () => {
+    expect(expectedPublisher('example.com')).toBeNull();
+    expect(expectedPublisher('')).toBeNull();
+    expect(expectedPublisher(null)).toBeNull();
+  });
+
+  // marvel.com.evil.example のような接尾辞一致で誤判定しないこと
+  it('ドメインの部分一致では判定しない', () => {
+    expect(expectedPublisher('marvel.com.example.net')).toBeNull();
+    expect(expectedPublisher('notmarvel.com')).toBeNull();
+  });
+});
+
+describe('publisherConflicts', () => {
+  const MARVEL = 'Brian David Banner is a character appearing in American comic books '
+    + 'published by Marvel Comics.';
+  const ARCHIE = 'Reginald "Reggie" Mantle is a fictional character in the Archie Comics '
+    + 'universe, published by Archie Comics.';
+
+  it('出版社が一致すれば矛盾しない', () => {
+    expect(publisherConflicts(MARVEL, 'marvel')).toBe(false);
+  });
+
+  it('別の出版社なら矛盾とみなす', () => {
+    expect(publisherConflicts(ARCHIE, 'marvel')).toBe(true);
+  });
+
+  // 情報が無いものまで落とすと、組織・場所の記事が軒並み消える
+  it('published by の記載が無ければ矛盾としない', () => {
+    expect(publisherConflicts('S.H.I.E.L.D. is a fictional espionage organization.', 'marvel')).toBe(false);
+  });
+
+  it('期待出版社が無ければ常に矛盾しない', () => {
+    expect(publisherConflicts(ARCHIE, null)).toBe(false);
+    expect(publisherConflicts(ARCHIE, '')).toBe(false);
+  });
+
+  // Marvel の旧社名。Captain America 等の初期キャラ記事で使われる
+  it('旧社名（Timely / Atlas）も Marvel とみなす', () => {
+    expect(publisherConflicts('... published by Timely Comics.', 'marvel')).toBe(false);
+    expect(publisherConflicts('... published by Atlas Comics.', 'marvel')).toBe(false);
+  });
+
+  it('DC の傘下レーベルも DC とみなす', () => {
+    expect(publisherConflicts('... published by Vertigo, an imprint of DC Comics.', 'dc')).toBe(false);
+  });
+});
+
+describe('passesGate — 出版社条件', () => {
+  const base = {
+    term: 'REGGIE',
+    title: 'Reggie Mantle',
+    intro: 'Reginald "Reggie" Mantle is a fictional character appearing in American comic books '
+      + 'published by Archie Comics. He is a recurring rival in the Archie stories.',
+    powers: '',
+  };
+
+  it('publisher を渡さなければ従来どおり通す（後方互換）', () => {
+    expect(passesGate(base)).toBe(true);
+  });
+
+  it('別出版社の記事は却下する', () => {
+    expect(passesGate({ ...base, publisher: 'marvel' })).toBe(false);
+  });
+
+  it('同じ出版社なら通す', () => {
+    const marvel = {
+      term: 'BANNER',
+      title: 'Brian Banner',
+      intro: 'Brian David Banner is a character appearing in American comic books '
+        + 'published by Marvel Comics. He is the father of Bruce Banner.',
+      powers: '',
+    };
+    expect(passesGate({ ...marvel, publisher: 'marvel' })).toBe(true);
   });
 });
