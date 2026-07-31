@@ -295,17 +295,19 @@ export function passesGate(parts) {
 const PUBLISHERS = [
   { key: 'marvel', hosts: ['marvel.com'], pattern: /marvel|timely|atlas\s+comics/i },
   { key: 'dc', hosts: ['dc.com', 'dcuniverseinfinite.com', 'readdc.com'], pattern: /\bDC\b|vertigo|wildstorm/i },
-  // 以下はホストを持たない（＝期待出版社にはならない）が、「別の出版社を名乗っている」
-  // ことの検出には使う。これが無いと Archie・Image 等の別宇宙の記事を見逃す
-  { key: 'archie', hosts: [], pattern: /archie\s+comics/i },
-  { key: 'image', hosts: [], pattern: /image\s+comics/i },
-  { key: 'darkhorse', hosts: [], pattern: /dark\s+horse/i },
-  { key: 'idw', hosts: [], pattern: /\bIDW\b/i },
-  { key: 'boom', hosts: [], pattern: /boom!?\s+studios/i },
-  { key: 'dynamite', hosts: [], pattern: /dynamite\s+entertainment/i },
-  { key: 'valiant', hosts: [], pattern: /valiant\s+(?:comics|entertainment)/i },
+  { key: 'archie', hosts: ['archiecomics.com'], pattern: /archie\s+comics/i },
+  { key: 'image', hosts: ['imagecomics.com'], pattern: /image\s+comics/i },
+  { key: 'darkhorse', hosts: ['darkhorse.com'], pattern: /dark\s+horse/i },
+  { key: 'idw', hosts: ['idwpublishing.com'], pattern: /\bIDW\b/i },
+  { key: 'boom', hosts: ['boom-studios.com'], pattern: /boom!?\s+studios/i },
+  { key: 'dynamite', hosts: ['dynamite.com'], pattern: /dynamite\s+entertainment/i },
+  { key: 'valiant', hosts: ['valiantentertainment.com'], pattern: /valiant\s+(?:comics|entertainment)/i },
+  // 日本の出版社はまとめて 1 つの鍵にする。Viz は集英社作品を英語版として出しており、
+  // 記事の表記も揺れるため、社ごとに分けると同じ作品で誤って矛盾扱いになる
+  { key: 'manga', hosts: ['viz.com', 'shonenjump.com', 'shueisha.co.jp', 'kodansha.us', 'kodanshacomics.com'],
+    pattern: /shueisha|kodansha|shogakukan|\bviz\s+media/i },
+  // 廃業した出版社。閲覧サイトは存在しないので検出専用
   { key: 'charlton', hosts: [], pattern: /charlton\s+comics/i },
-  { key: 'manga', hosts: [], pattern: /shueisha|kodansha|shogakukan|\bviz\s+media/i },
 ];
 
 /**

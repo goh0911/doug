@@ -486,3 +486,43 @@ describe('buildSearchUrl — maxlag', () => {
     expect(decodeURIComponent(buildSearchUrl('Hulk', '', { maxlag: 'x' }))).not.toContain('maxlag');
   });
 });
+
+
+describe('expectedPublisher — Marvel/DC 以外のサイト', () => {
+  // 指摘（Codex）: ホスト対応が Marvel/DC だけだと、他社サイトでは出版社ゲートが
+  // 丸ごと無効になり、REGGIE → Reggie Mantle と同種の誤りが今も起きる
+  it.each([
+    ['www.archiecomics.com', 'archie'],
+    ['imagecomics.com', 'image'],
+    ['www.darkhorse.com', 'darkhorse'],
+    ['digital.darkhorse.com', 'darkhorse'],
+    ['www.idwpublishing.com', 'idw'],
+    ['boom-studios.com', 'boom'],
+    ['www.dynamite.com', 'dynamite'],
+    ['valiantentertainment.com', 'valiant'],
+    ['www.viz.com', 'manga'],
+    ['mangaplus.shueisha.co.jp', 'manga'],
+    ['kodanshacomics.com', 'manga'],
+  ])('%s → %s', (host, key) => {
+    expect(expectedPublisher(host)).toBe(key);
+  });
+
+  // 複数出版社を扱うストアは「期待出版社」を決められない。誤った条件を課すより
+  // 条件なし（従来動作）に落とすほうが安全
+  it('複数出版社を扱うストアは判定しない', () => {
+    expect(expectedPublisher('www.comixology.com')).toBeNull();
+    expect(expectedPublisher('read.amazon.com')).toBeNull();
+  });
+
+  it('Archie サイトで読んでいれば Marvel の記事を却下する', () => {
+    const intro = 'A character appearing in American comic books published by Marvel Comics, '
+      + 'with a description long enough to satisfy the minimum introduction length gate.';
+    expect(publisherConflicts(intro, expectedPublisher('archiecomics.com'))).toBe(true);
+  });
+
+  it('Archie サイトで読んでいれば Archie の記事は通す', () => {
+    const intro = 'Reginald "Reggie" Mantle is a fictional teenager in stories published by Archie Comics, '
+      + 'introduced by writer-artist Bob Montana in Jackpot Comics #5.';
+    expect(publisherConflicts(intro, expectedPublisher('archiecomics.com'))).toBe(false);
+  });
+});

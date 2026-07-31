@@ -30,6 +30,7 @@ import { buildGlossPrompt, parseGlossResponse } from './utils/gloss-summary.js';
 import { sanitizePairForNano, parseCandidatesJson, buildExtractionPrompt } from './utils/nano-extract.js';
 import { isUsable } from './utils/gloss-cache.js';
 import { planGlossGeneration, seriesNameAttempts, acceptsNonExactTitle, retryAfterMs } from './utils/gloss-policy.js';
+import { createSemaphore } from './utils/semaphore.js';
 
 // ============================================================
 // マイグレーション: sync → local への移行
@@ -344,12 +345,24 @@ const QUERY_TRANSIENT = { status: 'transient', hit: null };
 // 一斉に再試行して同じ origin を再度圧迫する（Codex 指摘 #4）
 let glossFetchCooldownUntil = 0;
 
+// Wikipedia への同時接続を Service Worker 全体で絞る。GLOSS_CONCURRENCY は
+// 1 回の resolveGlossDefs 内の上限でしかなく、別シリーズ・別言語の解説生成が
+// 同時に走ると合算されて同じ origin を圧迫する（Codex 指摘 #4）
+const glossFetchSemaphore = createSemaphore(GLOSS_CONCURRENCY);
+
 /** 検索クエリ 1 本を実行する。@returns {{status:'ok'|'miss'|'transient', hit:object|null}} */
 async function tryWikipediaQuery(term, seriesName, publisher, opts = {}) {
   const url = buildSearchUrl(term, seriesName, opts);
   if (!url) return QUERY_MISS;
   // クールダウン中は投げない。失敗ではなく「今回は試さなかった」なのでキャッシュもしない
   if (Date.now() < glossFetchCooldownUntil) return QUERY_TRANSIENT;
+
+  // 待っている間にクールダウンへ入ることがあるので、スロット取得後にもう一度見る
+  await glossFetchSemaphore.acquire();
+  if (Date.now() < glossFetchCooldownUntil) {
+    glossFetchSemaphore.release();
+    return QUERY_TRANSIENT;
+  }
 
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), GLOSS_FETCH_TIMEOUT_MS);
@@ -372,6 +385,7 @@ async function tryWikipediaQuery(term, seriesName, publisher, opts = {}) {
     return QUERY_TRANSIENT;
   } finally {
     clearTimeout(timeoutId);
+    glossFetchSemaphore.release();
   }
 
   // maxlag / readonly / ratelimited は HTTP 200 で返るため res.ok を素通りする
