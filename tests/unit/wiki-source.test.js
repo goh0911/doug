@@ -3,7 +3,7 @@ import { describe, it, expect } from 'vitest';
 import {
   WIKIPEDIA_ORIGIN, buildSearchUrl, parseSearchResponse,
   extractIntro, extractPowers, passesGate, termAppearsIn, isExactTitleMatch, buildPageUrl,
-  expectedPublisher, publisherConflicts,
+  expectedPublisher, publisherConflicts, isTransientHttpStatus, isTransientApiError,
 } from '../../utils/wiki-source.js';
 
 describe('buildSearchUrl', () => {
@@ -373,5 +373,96 @@ describe('passesGate — 出版社条件', () => {
       powers: '',
     };
     expect(passesGate({ ...marvel, publisher: 'marvel' })).toBe(true);
+  });
+});
+
+
+// ============================================================
+// Codex レビュー指摘への対応
+// ============================================================
+
+describe('publisherConflicts — 移管・共同出版の誤却下を防ぐ', () => {
+  // 指摘: 最初の "published by" だけを読むと、旧出版社の記述で正しい記事を落とす
+  it('旧出版社が先に書かれていても、期待出版社が本文にあれば通す', () => {
+    const intro = 'Peter Cannon is a comic book character originally published by Charlton Comics. '
+      + 'The character was later acquired and published by DC Comics.';
+    expect(publisherConflicts(intro, 'dc')).toBe(false);
+  });
+
+  it('共同出版でも期待出版社が現れれば通す', () => {
+    const intro = 'Amalgam is a character appearing in comic books published by DC Comics and Marvel Comics.';
+    expect(publisherConflicts(intro, 'marvel')).toBe(false);
+  });
+
+  // 指摘: "published by" 以外の表記を全て見逃していた
+  it('published by 以外の表記でも別出版社を検出する', () => {
+    expect(publisherConflicts('Reggie Mantle is an Archie Comics character.', 'marvel')).toBe(true);
+    expect(publisherConflicts('Spawn is a character from Image Comics.', 'marvel')).toBe(true);
+  });
+
+  it('Marvel/DC 以外の出版社も既知として扱う', () => {
+    const others = ['Archie Comics', 'Image Comics', 'Dark Horse Comics', 'IDW Publishing',
+      'Boom! Studios', 'Dynamite Entertainment', 'Valiant Comics', 'Shueisha'];
+    for (const pub of others) {
+      expect(publisherConflicts(`A character published by ${pub}.`, 'marvel')).toBe(true);
+    }
+  });
+
+  it('出版社をひとつも名乗らない記事は通す（組織・場所の記事を巻き添えにしない）', () => {
+    expect(publisherConflicts('Gamma Base is a fictional military installation.', 'marvel')).toBe(false);
+  });
+
+  // 指摘: タイトルの曖昧さ回避括弧が出版社を名乗っている場合
+  it('タイトルの括弧が別出版社を名乗っていれば却下する', () => {
+    expect(publisherConflicts('A superhero character.', 'marvel', 'Captain Marvel (DC Comics)')).toBe(true);
+    expect(publisherConflicts('A superhero character.', 'marvel', 'Vision (Marvel Comics)')).toBe(false);
+    expect(publisherConflicts('A superhero character.', 'marvel', 'Vision (comics)')).toBe(false);
+  });
+});
+
+describe('passesGate — タイトルの出版社修飾', () => {
+  const base = {
+    term: 'CAPTAIN MARVEL',
+    title: 'Captain Marvel (DC Comics)',
+    intro: 'Captain Marvel is a superhero appearing in American comic books. '
+      + 'He is one of the most powerful heroes of his world and fights crime in Fawcett City.',
+    powers: '',
+  };
+
+  it('タイトルが別出版社を名乗れば却下する（導入節に出版社の記載が無くても）', () => {
+    expect(passesGate({ ...base, publisher: 'marvel' })).toBe(false);
+  });
+
+  it('publisher を渡さなければ従来どおり通す', () => {
+    expect(passesGate(base)).toBe(true);
+  });
+});
+
+describe('一時的失敗の判定（24 時間の失敗キャッシュに焼き付けないため）', () => {
+  it('429 / 408 / 5xx は一時的', () => {
+    for (const s of [408, 429, 500, 502, 503, 504]) expect(isTransientHttpStatus(s)).toBe(true);
+  });
+
+  it('404 / 400 は恒久的（その語には記事が無い）', () => {
+    for (const s of [400, 401, 403, 404, 410]) expect(isTransientHttpStatus(s)).toBe(false);
+  });
+
+  it('200 は一時的失敗ではない', () => {
+    expect(isTransientHttpStatus(200)).toBe(false);
+  });
+
+  // MediaWiki の maxlag は HTTP 200 + JSON error で返るため res.ok を素通りする
+  it('maxlag 等の JSON エラーは HTTP 200 でも一時的とみなす', () => {
+    expect(isTransientApiError({ error: { code: 'maxlag', info: 'Waiting for a database server' } })).toBe(true);
+    expect(isTransientApiError({ error: { code: 'readonly' } })).toBe(true);
+    expect(isTransientApiError({ error: { code: 'ratelimited' } })).toBe(true);
+    expect(isTransientApiError({ error: { code: 'internal_api_error_DBQueryError' } })).toBe(true);
+  });
+
+  it('通常の応答・恒久的なエラーは一時的ではない', () => {
+    expect(isTransientApiError({ query: { pages: {} } })).toBe(false);
+    expect(isTransientApiError({ error: { code: 'invalidtitle' } })).toBe(false);
+    expect(isTransientApiError(null)).toBe(false);
+    expect(isTransientApiError(undefined)).toBe(false);
   });
 });

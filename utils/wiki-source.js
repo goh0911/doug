@@ -276,7 +276,7 @@ export function passesGate(parts) {
   if (typeof intro !== 'string' || intro.length < INTRO_MIN_LENGTH) return false;
   if (!/comic/i.test(intro)) return false;
   if (isNonEntityArticle(title)) return false;
-  if (publisherConflicts(intro, publisher)) return false;
+  if (publisherConflicts(intro, publisher, title)) return false;
   return termAppearsIn(term, title, intro);
 }
 
@@ -288,6 +288,17 @@ export function passesGate(parts) {
 const PUBLISHERS = [
   { key: 'marvel', hosts: ['marvel.com'], pattern: /marvel|timely|atlas\s+comics/i },
   { key: 'dc', hosts: ['dc.com', 'dcuniverseinfinite.com', 'readdc.com'], pattern: /\bDC\b|vertigo|wildstorm/i },
+  // 以下はホストを持たない（＝期待出版社にはならない）が、「別の出版社を名乗っている」
+  // ことの検出には使う。これが無いと Archie・Image 等の別宇宙の記事を見逃す
+  { key: 'archie', hosts: [], pattern: /archie\s+comics/i },
+  { key: 'image', hosts: [], pattern: /image\s+comics/i },
+  { key: 'darkhorse', hosts: [], pattern: /dark\s+horse/i },
+  { key: 'idw', hosts: [], pattern: /\bIDW\b/i },
+  { key: 'boom', hosts: [], pattern: /boom!?\s+studios/i },
+  { key: 'dynamite', hosts: [], pattern: /dynamite\s+entertainment/i },
+  { key: 'valiant', hosts: [], pattern: /valiant\s+(?:comics|entertainment)/i },
+  { key: 'charlton', hosts: [], pattern: /charlton\s+comics/i },
+  { key: 'manga', hosts: [], pattern: /shueisha|kodansha|shogakukan|\bviz\s+media/i },
 ];
 
 /**
@@ -319,13 +330,54 @@ export function expectedPublisher(host) {
  * @param {string|null} publisher expectedPublisher の戻り値
  * @returns {boolean}
  */
-export function publisherConflicts(intro, publisher) {
+export function publisherConflicts(intro, publisher, title = '') {
   if (!publisher) return false;
   const expected = PUBLISHERS.find((p) => p.key === publisher);
   if (!expected) return false;
-  const m = String(intro ?? '').match(/published by ([^.;]+)/i);
-  if (!m) return false;
-  return !expected.pattern.test(m[1]);
+
+  // タイトルの曖昧さ回避括弧が出版社を名乗る場合（Captain Marvel (DC Comics)）は
+  // そこを最優先で見る。導入節が出版社に触れない記事でも別宇宙を弾ける
+  const paren = String(title ?? '').match(/\(([^)]*)\)/);
+  if (paren) {
+    const other = PUBLISHERS.find((p) => p.key !== publisher && p.pattern.test(paren[1]));
+    if (other && !expected.pattern.test(paren[1])) return true;
+  }
+
+  // 「最初の published by だけを見る」と、移管・共同出版のキャラクターを誤って落とす
+  // （例: originally published by Charlton Comics → later published by DC Comics）。
+  // 期待出版社が導入節のどこかに現れるなら矛盾なしとする
+  const text = String(intro ?? '');
+  if (expected.pattern.test(text)) return false;
+
+  // 期待出版社がどこにも現れず、別の既知出版社を名乗っているときだけ却下する。
+  // 出版社に一切触れない記事（組織・場所など）は従来どおり通す
+  return PUBLISHERS.some((p) => p.key !== publisher && p.pattern.test(text));
+}
+
+/**
+ * HTTP ステータスが一時的な失敗か。
+ * 一時的失敗を「その語には記事が無い」として 24 時間キャッシュしてはいけない
+ * （実測: レート制限に巻き込まれて 17 語中 14 語が丸一日「解説なし」になった）。
+ * @param {number} status
+ * @returns {boolean}
+ */
+export function isTransientHttpStatus(status) {
+  const s = Number(status);
+  if (!Number.isFinite(s)) return false;
+  return s === 408 || s === 429 || (s >= 500 && s <= 599);
+}
+
+/**
+ * MediaWiki が HTTP 200 で返す一時的エラーか。
+ * maxlag / readonly / ratelimited は res.ok を素通りするため、
+ * ステータスだけを見ていると「ヒット 0 件」と同じ恒久的失敗として扱ってしまう。
+ * @param {object} json
+ * @returns {boolean}
+ */
+export function isTransientApiError(json) {
+  const code = json && json.error && json.error.code;
+  if (typeof code !== 'string') return false;
+  return /^(maxlag|readonly|ratelimited)$|internal_api_error/i.test(code);
 }
 
 /**

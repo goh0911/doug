@@ -24,6 +24,7 @@ import { buildSeriesDetectionPrompt, parseSeriesDetectionResponse } from './util
 import {
   WIKIPEDIA_ORIGIN, SOURCE_ID, buildSearchUrl, parseSearchResponse,
   extractIntro, extractPowers, passesGate, buildPageUrl, isExactTitleMatch, expectedPublisher,
+  isTransientHttpStatus, isTransientApiError,
 } from './utils/wiki-source.js';
 import { buildGlossPrompt, parseGlossResponse } from './utils/gloss-summary.js';
 import { sanitizePairForNano, parseCandidatesJson, buildExtractionPrompt } from './utils/nano-extract.js';
@@ -330,10 +331,16 @@ function glossUserAgent() {
   return `Doug-Comic-Translator/${v} (https://github.com/goh0911/doug; chrome-extension)`;
 }
 
-/** 検索クエリ 1 本を実行し、ゲートを通れば素材を返す。通らなければ null */
+// 検索 1 本の結果。'miss'（その語には記事が無い）と 'transient'（レート制限・通信断）を
+// 区別する。区別しないと一時的失敗が 24 時間の「解説なし」として焼き付く
+// （実測: 別プロセスのレート制限に巻き込まれ、17 語中 14 語が丸一日失敗扱いになった）
+const QUERY_MISS = { status: 'miss', hit: null };
+const QUERY_TRANSIENT = { status: 'transient', hit: null };
+
+/** 検索クエリ 1 本を実行する。@returns {{status:'ok'|'miss'|'transient', hit:object|null}} */
 async function tryWikipediaQuery(term, seriesName, publisher) {
   const url = buildSearchUrl(term, seriesName);
-  if (!url) return null;
+  if (!url) return QUERY_MISS;
 
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), GLOSS_FETCH_TIMEOUT_MS);
@@ -343,24 +350,35 @@ async function tryWikipediaQuery(term, seriesName, publisher) {
       signal: controller.signal,
       headers: { 'Api-User-Agent': glossUserAgent() },
     });
-    if (!res.ok) return null;
+    if (!res.ok) {
+      // ステータスを捨てると 429 と 404 の区別が後から一切つかない
+      console.debug('[gloss] Wikipedia HTTP', res.status, term);
+      return isTransientHttpStatus(res.status) ? QUERY_TRANSIENT : QUERY_MISS;
+    }
     json = await res.json();
   } catch {
-    return null;
+    // 通信断・タイムアウト（AbortError）はいずれも一時的
+    return QUERY_TRANSIENT;
   } finally {
     clearTimeout(timeoutId);
   }
 
+  // maxlag / readonly / ratelimited は HTTP 200 で返るため res.ok を素通りする
+  if (isTransientApiError(json)) {
+    console.debug('[gloss] Wikipedia API error', json.error.code, term);
+    return QUERY_TRANSIENT;
+  }
+
   const page = parseSearchResponse(json);
-  if (!page) return null;
+  if (!page) return QUERY_MISS;
 
   const intro = extractIntro(page.extract);
   const powers = extractPowers(page.extract);
   // 誤ったページを黙って採用しないための唯一の関門（設計書 §1.2）。
   // term / title を渡さないと記事の同一性を検証できない（別人の解説が出る）
-  if (!passesGate({ term, title: page.title, intro, powers, publisher })) return null;
+  if (!passesGate({ term, title: page.title, intro, powers, publisher })) return QUERY_MISS;
 
-  return { title: page.title, url: buildPageUrl(page.title), intro, powers };
+  return { status: 'ok', hit: { title: page.title, url: buildPageUrl(page.title), intro, powers } };
 }
 
 /**
@@ -372,7 +390,9 @@ async function tryWikipediaQuery(term, seriesName, publisher) {
  *   "Daredevil" Daredevil comics → Karen Page                       能力節なし
  * そこで 1 本目が素材を返さなかったときにシリーズ名を外して 1 回だけ再試行する。
  * 「返さなかった」にはゲート却下だけでなく 0 件ヒット・通信失敗・タイムアウトも含む
- * （tryWikipediaQuery はいずれも null を返す）。再試行は 1 回だけなので上限は 2 コール。
+ * （tryWikipediaQuery はいずれも 'miss' を返す）。再試行は 1 回だけなので上限は 2 コール。
+ * ただし一時的失敗（'transient'）のときは再試行せず即座に打ち切る。レート制限中に
+ * 2 本目を撃っても状況を悪化させるだけで、しかも失敗としてキャッシュしてはいけない。
  *
  * 順序が逆だと危険なので入れ替えないこと。シリーズ名無しの単独検索は
  * "Vision" comics → Scarlet Witch のように **ゲートを通る別人** を引くことがあり、
@@ -387,12 +407,14 @@ async function fetchWikipediaEntry(term, seriesName, publisher) {
   // （acceptsNonExactTitle。この条件が無いと上の Brian Banner がそのまま採用される）
   let fallback = null;
   for (const attempt of seriesNameAttempts(seriesName)) {
-    const hit = await tryWikipediaQuery(term, attempt, publisher);
-    if (!hit) continue;
-    if (isExactTitleMatch(term, hit.title)) return hit;
-    if (!fallback && acceptsNonExactTitle(attempt)) fallback = hit;
+    const r = await tryWikipediaQuery(term, attempt, publisher);
+    // レート制限中に 2 本目を撃っても状況を悪化させるだけなので即座に打ち切る
+    if (r.status === 'transient') return { material: null, transient: true };
+    if (r.status !== 'ok') continue;
+    if (isExactTitleMatch(term, r.hit.title)) return { material: r.hit, transient: false };
+    if (!fallback && acceptsNonExactTitle(attempt)) fallback = r.hit;
   }
-  return fallback;
+  return { material: fallback, transient: false };
 }
 
 /** Nano で解説を生成する。不可・失敗は null */
@@ -439,7 +461,8 @@ async function generateGlossWithApi(prompt, term) {
 const wikipediaSource = {
   id: SOURCE_ID,
   origin: WIKIPEDIA_ORIGIN,
-  fetchEntry: fetchWikipediaEntry,   // (term, seriesName, publisher) => { title, url, intro, powers } | null
+  // (term, seriesName, publisher) => { material: {title,url,intro,powers}|null, transient: boolean }
+  fetchEntry: fetchWikipediaEntry,
 };
 
 const GLOSS_SOURCES = [wikipediaSource];
@@ -452,15 +475,21 @@ function seriesHost(series) {
   try { return new URL(latest.origin).hostname; } catch { return ''; }
 }
 
-/** 全ソースを順に試し、最初に素材を返したものを採用する */
+/**
+ * 全ソースを順に試し、最初に素材を返したものを採用する。
+ * 素材が無い場合、それが一時的失敗だったかを transient で伝える（失敗キャッシュの判断に使う）
+ * @returns {{ material: object|null, transient: boolean }}
+ */
 async function fetchFromSources(term, seriesName, publisher) {
+  let transient = false;
   for (const source of GLOSS_SOURCES) {
     const granted = await chrome.permissions.contains({ origins: [source.origin] }).catch(() => false);
     if (!granted) continue;
-    const material = await source.fetchEntry(term, seriesName, publisher);
-    if (material) return { ...material, sourceId: source.id };
+    const r = await source.fetchEntry(term, seriesName, publisher);
+    if (r && r.material) return { material: { ...r.material, sourceId: source.id }, transient: false };
+    if (r && r.transient) transient = true;
   }
-  return null;
+  return { material: null, transient };
 }
 
 /**
@@ -474,8 +503,13 @@ async function fetchFromSources(term, seriesName, publisher) {
  */
 async function buildGlossEntry(term, seriesName, langLabel, nanoOnly = false, publisher = null) {
   const now = Date.now();
-  const material = await fetchFromSources(term, seriesName, publisher);
-  if (!material) return { failed: true, at: now };
+  const { material, transient } = await fetchFromSources(term, seriesName, publisher);
+  if (!material) {
+    // 一時的失敗（レート制限・通信断・maxlag）は「今回は試さなかった」扱いにして
+    // 24 時間の失敗キャッシュに焼き付けない。null は呼び出し側が保存せず次回再試行する
+    if (transient) return null;
+    return { failed: true, at: now };
+  }
 
   const prompt = buildGlossPrompt({
     term,
