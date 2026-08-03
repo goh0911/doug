@@ -104,7 +104,7 @@ export async function handleImageTranslation(imageData, imageUrl, imageDims, opt
         settings.ollamaEndpoint || 'http://localhost:11434',
         settings.ollamaModel || 'qwen3.6:35b-a3b',
         imageData,
-        prompt + OLLAMA_COORD_INSTRUCTION,
+        buildTranslationPrompt(settings.targetLang, seriesSection, { namedCoords: true }),
         imageDims
       );
     } else if (provider === 'claude') {
@@ -142,20 +142,26 @@ function parseImageDataUrl(imageDataUrl) {
   return { mimeType, base64Data };
 }
 
-// Ollama だけ座標を名前付きフィールドで受け取る（OLLAMA_TRANSLATION_SCHEMA と対）。
-// 位置引数の配列だと軸の順序がモデルの流儀に左右され、実測で qwen3-vl は
-// [x_min, y_min, x_max, y_max] を返していた。共有プロンプトは他プロバイダも
-// 使うので変更せず、Ollama の呼び出しにだけこの指示を足す
-const OLLAMA_COORD_INSTRUCTION = `
-
-【座標の指定（この形式を厳守）】
-box は使わず、x_min / y_min / x_max / y_max の 4 つの数値フィールドで返してください。
-画像の左上を (0,0)、右下を (1000,1000) とする正規化座標です。`;
-
 // 全プロバイダー共通の翻訳プロンプト
-function buildTranslationPrompt(targetLang, seriesSection = '') {
+// namedCoords: 座標を box 配列ではなく x_min/y_min/x_max/y_max で返させる。
+// 位置引数の配列だと軸の順序がモデルの流儀に左右される（実測: qwen3-vl は
+// [x_min, y_min, x_max, y_max] を返し、Doug の [y_min, x_min, ...] と食い違っていた）。
+// Ollama だけこちらを使う（OLLAMA_TRANSLATION_SCHEMA と対）
+function buildTranslationPrompt(targetLang, seriesSection = '', { namedCoords = false } = {}) {
   const langName = LANG_NAMES[targetLang] || targetLang;
   const sectionBlock = seriesSection ? `\n\n${seriesSection}` : '';
+  const coordSpec = namedCoords
+    ? `- x_min, y_min, x_max, y_max: テキスト領域の境界。画像の左上を (0,0)、右下を (1000,1000) とする正規化座標
+  - x_min / x_max: 左端・右端
+  - y_min / y_max: 上端・下端`
+    : `- box: [y_min, x_min, y_max, x_max] — 0〜1000の正規化座標で、テキスト領域の境界を示す
+  - y_min: テキスト領域の上端（0=画像上端, 1000=画像下端）
+  - x_min: テキスト領域の左端（0=画像左端, 1000=画像右端）
+  - y_max: テキスト領域の下端
+  - x_max: テキスト領域の右端`;
+  const example = namedCoords
+    ? `[{"original":"FIVE...?","translated":"5人…？","type":"speech","x_min":30,"y_min":20,"x_max":180,"y_max":80}]`
+    : `[{"original":"FIVE...?","translated":"5人…？","type":"speech","box":[20,30,80,180]},{"original":"ROYAL CONSUL...","translated":"王室顧問…","type":"caption","box":[5,10,120,480]}]`;
   return `あなたはコミック翻訳の専門家です。この画像に含まれるすべてのテキストを検出・翻訳してください。${sectionBlock}
 
 【検出ルール】
@@ -167,11 +173,7 @@ function buildTranslationPrompt(targetLang, seriesSection = '') {
 - original: 元の英語テキスト
 - translated: ${langName}への自然な翻訳（短く簡潔に）
 - type: "speech" / "caption" / "sfx"
-- box: [y_min, x_min, y_max, x_max] — 0〜1000の正規化座標で、テキスト領域の境界を示す
-  - y_min: テキスト領域の上端（0=画像上端, 1000=画像下端）
-  - x_min: テキスト領域の左端（0=画像左端, 1000=画像右端）
-  - y_max: テキスト領域の下端
-  - x_max: テキスト領域の右端
+${coordSpec}
 
 翻訳ルール:
 - コミックの文脈に合った自然な${langName}にする
@@ -179,13 +181,13 @@ function buildTranslationPrompt(targetLang, seriesSection = '') {
 - 感情・トーンを維持する
 - 翻訳文は簡潔に。吹き出しに収まる長さにする
 
-boxルール:
+座標ルール:
 - 吹き出し内のテキスト部分を正確に囲む（尻尾は含めない）
-- 隣接する吹き出しのboxが重ならないようにする
+- 隣接する吹き出しの領域が重ならないようにする
 - テキストが複数行でも1つの吹き出しは1つのエントリにまとめる
 
 JSON配列のみ返してください:
-[{"original":"FIVE...?","translated":"5人…？","type":"speech","box":[20,30,80,180]},{"original":"ROYAL CONSUL...","translated":"王室顧問…","type":"caption","box":[5,10,120,480]}]`;
+${example}`;
 }
 
 // レスポンスをパースする共通処理
