@@ -8,7 +8,7 @@ import { getSeries } from './series-store.js';
 import { buildSeriesPromptSection } from './utils/prompt-builder.js';
 import { applyGlossaryPostProcess } from './utils/glossary-substitute.js';
 import { maskSecrets } from './utils/mask-secrets.js';
-import { supportsThinking, buildOllamaChatBody } from './utils/ollama.js';
+import { supportsThinking, buildOllamaChatBody, pickOllamaResponseText, ollamaParseResponse } from './utils/ollama.js';
 
 const LANG_NAMES = {
   ja: '日本語', ko: '韓国語', 'zh-CN': '簡体字中国語', 'zh-TW': '繁体字中国語',
@@ -104,7 +104,7 @@ export async function handleImageTranslation(imageData, imageUrl, imageDims, opt
         settings.ollamaEndpoint || 'http://localhost:11434',
         settings.ollamaModel || 'qwen3.6:35b-a3b',
         imageData,
-        prompt,
+        prompt + OLLAMA_COORD_INSTRUCTION,
         imageDims
       );
     } else if (provider === 'claude') {
@@ -141,6 +141,16 @@ function parseImageDataUrl(imageDataUrl) {
   const base64Data = imageDataUrl.replace(/^data:image\/\w+;base64,/, '');
   return { mimeType, base64Data };
 }
+
+// Ollama だけ座標を名前付きフィールドで受け取る（OLLAMA_TRANSLATION_SCHEMA と対）。
+// 位置引数の配列だと軸の順序がモデルの流儀に左右され、実測で qwen3-vl は
+// [x_min, y_min, x_max, y_max] を返していた。共有プロンプトは他プロバイダも
+// 使うので変更せず、Ollama の呼び出しにだけこの指示を足す
+const OLLAMA_COORD_INSTRUCTION = `
+
+【座標の指定（この形式を厳守）】
+box は使わず、x_min / y_min / x_max / y_max の 4 つの数値フィールドで返してください。
+画像の左上を (0,0)、右下を (1000,1000) とする正規化座標です。`;
 
 // 全プロバイダー共通の翻訳プロンプト
 function buildTranslationPrompt(targetLang, seriesSection = '') {
@@ -434,10 +444,13 @@ async function translateImageWithOllama(endpoint, model, imageData, prompt, imag
   }
 
   const data = await res.json();
-  const content = data.message?.content;
+  // qwen3-vl は think:false を送っても答えを thinking に入れ content を空で返す
+  const content = pickOllamaResponseText(data.message);
   if (!content) throw new Error('Ollama から応答がありません');
 
-  return parseVisionResponse(content, imageDims);
+  // 名前付き座標（OLLAMA_TRANSLATION_SCHEMA）を解釈できるのは ollamaParseResponse だけ。
+  // parseVisionResponse は box 配列を前提にしており、この経路では 0 件になる
+  return ollamaParseResponse(content);
 }
 
 // ============================================================

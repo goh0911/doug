@@ -19,11 +19,31 @@ export const OLLAMA_TRANSLATION_SCHEMA = {
       original: { type: 'string' },
       translated: { type: 'string' },
       type: { type: 'string', enum: ['speech', 'caption', 'sfx'] },
-      box: { type: 'array', items: { type: 'integer' }, minItems: 4, maxItems: 4 },
+      // 位置引数の配列だと軸の順序がモデルの流儀に左右される。
+      // 実測: qwen3-vl は [x_min, y_min, x_max, y_max] で返すが、
+      // プロンプトは [y_min, x_min, y_max, x_max] を要求していて取り違えていた。
+      // フィールド名で受け渡せばこの曖昧さが消える
+      x_min: { type: 'integer' },
+      y_min: { type: 'integer' },
+      x_max: { type: 'integer' },
+      y_max: { type: 'integer' },
     },
-    required: ['original', 'translated', 'type', 'box'],
+    required: ['original', 'translated', 'type', 'x_min', 'y_min', 'x_max', 'y_max'],
   },
 };
+
+/**
+ * 応答本文を取り出す。
+ * 実測: qwen3-vl:8b は think:false を送っても答えを message.thinking に入れ、
+ * message.content は空文字で返す。content だけを見ていると常に 0 件になる。
+ * @param {object} message /api/chat の message
+ * @returns {string}
+ */
+export function pickOllamaResponseText(message) {
+  const content = (message && message.content) || '';
+  if (content.trim() !== '') return content;
+  return (message && message.thinking) || '';
+}
 
 /**
  * /api/show の応答から、そのモデルが thinking に対応しているかを判定する。
@@ -105,9 +125,16 @@ export function ollamaParseResponse(content) {
   if (!Array.isArray(results)) return [];
 
   try {
-    return results.filter(r => r.translated && (r.box || r.bbox)).map(r => {
+    const hasNamed = (r) => ['x_min', 'y_min', 'x_max', 'y_max'].every(k => typeof r[k] === 'number');
+    return results.filter(r => r.translated && (hasNamed(r) || r.box || r.bbox)).map(r => {
       let top, left, width, height;
-      if (r.box && Array.isArray(r.box)) {
+      // 名前付き座標を最優先する。軸の取り違えが起きないのはこの経路だけ
+      if (hasNamed(r)) {
+        const x1 = Math.min(r.x_min, r.x_max), x2 = Math.max(r.x_min, r.x_max);
+        const y1 = Math.min(r.y_min, r.y_max), y2 = Math.max(r.y_min, r.y_max);
+        left = (x1 / 1000) * 100; top = (y1 / 1000) * 100;
+        width = ((x2 - x1) / 1000) * 100; height = ((y2 - y1) / 1000) * 100;
+      } else if (r.box && Array.isArray(r.box)) {
         const box = (r.box.length === 1 && Array.isArray(r.box[0])) ? r.box[0] : r.box;
         if (box.length === 4) {
           const [yMin, xMin, yMax, xMax] = box;

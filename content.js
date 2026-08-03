@@ -128,9 +128,15 @@
     if (!Array.isArray(results)) return [];
 
     try {
-      return results.filter(r => r.translated && (r.box || r.bbox)).map(r => {
+      const hasNamed = (r) => ['x_min', 'y_min', 'x_max', 'y_max'].every(k => typeof r[k] === 'number');
+      return results.filter(r => r.translated && (hasNamed(r) || r.box || r.bbox)).map(r => {
         let top, left, width, height;
-        if (r.box && Array.isArray(r.box) && r.box.length === 4) {
+        if (hasNamed(r)) {
+          const x1 = Math.min(r.x_min, r.x_max), x2 = Math.max(r.x_min, r.x_max);
+          const y1 = Math.min(r.y_min, r.y_max), y2 = Math.max(r.y_min, r.y_max);
+          left = (x1 / 1000) * 100; top = (y1 / 1000) * 100;
+          width = ((x2 - x1) / 1000) * 100; height = ((y2 - y1) / 1000) * 100;
+        } else if (r.box && Array.isArray(r.box) && r.box.length === 4) {
           const [yMin, xMin, yMax, xMax] = r.box;
           top = (yMin / 1000) * 100; left = (xMin / 1000) * 100;
           width = ((xMax - xMin) / 1000) * 100; height = ((yMax - yMin) / 1000) * 100;
@@ -294,11 +300,20 @@
         original: { type: 'string' },
         translated: { type: 'string' },
         type: { type: 'string', enum: ['speech', 'caption', 'sfx'] },
-        box: { type: 'array', items: { type: 'integer' }, minItems: 4, maxItems: 4 },
+        x_min: { type: 'integer' },
+        y_min: { type: 'integer' },
+        x_max: { type: 'integer' },
+        y_max: { type: 'integer' },
       },
-      required: ['original', 'translated', 'type', 'box'],
+      required: ['original', 'translated', 'type', 'x_min', 'y_min', 'x_max', 'y_max'],
     },
   };
+
+  function pickOllamaResponseText(message) {
+    const content = (message && message.content) || '';
+    if (content.trim() !== '') return content;
+    return (message && message.thinking) || '';
+  }
 
   function supportsThinking(showJson) {
     const caps = showJson && showJson.capabilities;
@@ -384,7 +399,7 @@
 - original: 元の英語テキスト
 - translated: ${langName}への自然な翻訳（短く簡潔に）
 - type: "speech" / "caption" / "sfx"
-- box: [y_min, x_min, y_max, x_max] — 0〜1000の正規化座標で、テキスト領域の境界を示す
+- x_min, y_min, x_max, y_max: テキスト領域の境界。画像の左上を (0,0)、右下を (1000,1000) とする正規化座標
   - y_min: テキスト領域の上端（0=画像上端, 1000=画像下端）
   - x_min: テキスト領域の左端（0=画像左端, 1000=画像右端）
   - y_max: テキスト領域の下端
@@ -402,7 +417,7 @@ boxルール:
 - テキストが複数行でも1つの吹き出しは1つのエントリにまとめる
 
 JSON配列のみ返してください:
-[{"original":"FIVE...?","translated":"5人…？","type":"speech","box":[20,30,80,180]},{"original":"ROYAL CONSUL...","translated":"王室顧問…","type":"caption","box":[5,10,120,480]}]`;
+[{"original":"FIVE...?","translated":"5人…？","type":"speech","x_min":30,"y_min":20,"x_max":180,"y_max":80}]`;
 
     const thinking = await ollamaSupportsThinking(endpoint, model);
     let res;
@@ -421,7 +436,8 @@ JSON配列のみ返してください:
     if (res.status === 404) throw new Error(`モデル "${model}" がインストールされていません。設定画面でインストールしてください。`);
     if (!res.ok) throw new Error(`Ollama エラー (${res.status})`);
     const data = await res.json();
-    const text = data.message?.content;
+    // qwen3-vl は think:false を送っても答えを thinking に入れ content を空で返す
+    const text = pickOllamaResponseText(data.message);
     if (!text) throw new Error('Ollama から応答がありません');
     const parsed = ollamaParseResponse(text);
     // Phase 4: 翻訳ペア（生データ）を付与

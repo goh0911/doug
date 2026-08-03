@@ -2,7 +2,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   ollamaCleanText, ollamaParseResponse,
-  OLLAMA_TRANSLATION_SCHEMA, supportsThinking, buildOllamaChatBody,
+  OLLAMA_TRANSLATION_SCHEMA, supportsThinking, buildOllamaChatBody, pickOllamaResponseText,
 } from '../../utils/ollama.js';
 
 describe('ollamaCleanText', () => {
@@ -115,17 +115,78 @@ describe('buildOllamaChatBody', () => {
 });
 
 describe('OLLAMA_TRANSLATION_SCHEMA', () => {
-  it('配列を強制し、パーサが必要とする 4 フィールドを必須にする', () => {
+  it('配列を強制する', () => {
     expect(OLLAMA_TRANSLATION_SCHEMA.type).toBe('array');
-    const props = OLLAMA_TRANSLATION_SCHEMA.items.properties;
-    expect(Object.keys(props).sort()).toEqual(['box', 'original', 'translated', 'type']);
     expect(OLLAMA_TRANSLATION_SCHEMA.items.required).toContain('translated');
-    expect(OLLAMA_TRANSLATION_SCHEMA.items.required).toContain('box');
+  });
+});
+
+
+// ============================================================
+// 応答本文の取り出し
+// 実測: qwen3-vl:8b は think:false を送っても答えを message.thinking に入れ、
+// message.content は空文字で返す。content だけを見ていると常に 0 件になる
+// ============================================================
+describe('pickOllamaResponseText', () => {
+  it('content があればそれを使う', () => {
+    expect(pickOllamaResponseText({ content: '[1]', thinking: 'X' })).toBe('[1]');
   });
 
-  it('box は 4 要素の配列（ollamaParseResponse が length===4 を要求する）', () => {
-    const box = OLLAMA_TRANSLATION_SCHEMA.items.properties.box;
-    expect(box.minItems).toBe(4);
-    expect(box.maxItems).toBe(4);
+  it('content が空なら thinking を使う（qwen3-vl の実挙動）', () => {
+    expect(pickOllamaResponseText({ content: '', thinking: '[{"a":1}]' })).toBe('[{"a":1}]');
+  });
+
+  it('content が空白だけでも thinking を使う', () => {
+    expect(pickOllamaResponseText({ content: '   \n ', thinking: '[2]' })).toBe('[2]');
+  });
+
+  it('どちらも無ければ空文字', () => {
+    expect(pickOllamaResponseText({})).toBe('');
+    expect(pickOllamaResponseText(null)).toBe('');
+    expect(pickOllamaResponseText(undefined)).toBe('');
+  });
+});
+
+// ============================================================
+// 名前付き座標
+// 実測: qwen3-vl は box を [x_min, y_min, x_max, y_max] で返すが、
+// プロンプトは [y_min, x_min, y_max, x_max] を要求しており軸が入れ替わっていた。
+// 位置引数をやめてフィールド名で受け渡せば、モデルごとの流儀に左右されない
+// ============================================================
+describe('ollamaParseResponse — 名前付き座標', () => {
+  const item = (o) => JSON.stringify([{ original: 'A', translated: 'あ', type: 'speech', ...o }]);
+
+  it('x_min / y_min / x_max / y_max を解釈する', () => {
+    const r = ollamaParseResponse(item({ x_min: 100, y_min: 200, x_max: 500, y_max: 300 }));
+    expect(r).toHaveLength(1);
+    expect(r[0].bbox).toEqual({ left: 10, top: 20, width: 40, height: 10 });
+  });
+
+  it('左上と右下が逆でも正しい矩形にする', () => {
+    const r = ollamaParseResponse(item({ x_min: 500, y_min: 300, x_max: 100, y_max: 200 }));
+    expect(r[0].bbox).toEqual({ left: 10, top: 20, width: 40, height: 10 });
+  });
+
+  it('名前付き座標は box より優先する（両方あっても取り違えない）', () => {
+    const r = ollamaParseResponse(item({ x_min: 100, y_min: 200, x_max: 500, y_max: 300, box: [900, 900, 950, 950] }));
+    expect(r[0].bbox.left).toBe(10);
+    expect(r[0].bbox.top).toBe(20);
+  });
+
+  it('従来の box 形式も引き続き解釈する（後方互換）', () => {
+    const r = ollamaParseResponse(item({ box: [200, 100, 300, 500] }));
+    expect(r[0].bbox).toEqual({ left: 10, top: 20, width: 40, height: 10 });
+  });
+});
+
+describe('OLLAMA_TRANSLATION_SCHEMA — 名前付き座標', () => {
+  it('box ではなく x_min / y_min / x_max / y_max を必須にする', () => {
+    const props = OLLAMA_TRANSLATION_SCHEMA.items.properties;
+    expect(Object.keys(props).sort()).toEqual(
+      ['original', 'translated', 'type', 'x_max', 'x_min', 'y_max', 'y_min'].sort());
+    for (const k of ['x_min', 'y_min', 'x_max', 'y_max']) {
+      expect(OLLAMA_TRANSLATION_SCHEMA.items.required).toContain(k);
+    }
+    expect(props.box).toBeUndefined();
   });
 });
