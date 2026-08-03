@@ -8,6 +8,7 @@ import { getSeries } from './series-store.js';
 import { buildSeriesPromptSection } from './utils/prompt-builder.js';
 import { applyGlossaryPostProcess } from './utils/glossary-substitute.js';
 import { maskSecrets } from './utils/mask-secrets.js';
+import { supportsThinking, buildOllamaChatBody } from './utils/ollama.js';
 
 const LANG_NAMES = {
   ja: '日本語', ko: '韓国語', 'zh-CN': '簡体字中国語', 'zh-TW': '繁体字中国語',
@@ -377,6 +378,29 @@ async function translateImageWithOpenAI(apiKey, imageDataUrl, prompt, imageDims,
 // ============================================================
 // Ollama API
 // ============================================================
+// モデルごとの thinking 対応可否。Service Worker が生きている間は使い回す
+const ollamaThinkingCache = new Map();
+
+/**
+ * thinking 対応モデルに think:false を送らないと推論に入り実用にならない
+ * （実測: 文字の無いアイコン 1 枚で 539.7 秒 → think:false で 0.57 秒）。
+ * 判定できないときは false を返して think を送らない（非対応モデルを壊さない）
+ */
+async function ollamaSupportsThinking(endpoint, model) {
+  if (ollamaThinkingCache.has(model)) return ollamaThinkingCache.get(model);
+  let thinking = false;
+  try {
+    const res = await fetch(`${endpoint}/api/show`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model }),
+    });
+    if (res.ok) thinking = supportsThinking(await res.json());
+  } catch { /* 判定できなければ送らない */ }
+  ollamaThinkingCache.set(model, thinking);
+  return thinking;
+}
+
 async function translateImageWithOllama(endpoint, model, imageData, prompt, imageDims) {
   // http/https スキームのみ許可（SSRF 対策 — content.js:95 と対称）
   if (!/^https?:\/\//i.test(endpoint)) {
@@ -385,19 +409,16 @@ async function translateImageWithOllama(endpoint, model, imageData, prompt, imag
   // data:image/jpeg;base64, プレフィックスを除去
   const base64Data = imageData.replace(/^data:image\/\w+;base64,/, '');
 
+  const thinking = await ollamaSupportsThinking(endpoint, model);
   let res;
   try {
     res = await fetch(`${endpoint}/api/chat`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model,
-        messages: [{ role: 'user', content: prompt, images: [base64Data] }],
-        stream: false,
-      }),
+      body: JSON.stringify(buildOllamaChatBody({ model, prompt, base64: base64Data, thinking })),
     });
   } catch {
-    throw new Error('Ollama が起動していません。起動してから再試行してください。');
+    throw new Error('Ollama に接続できません。起動しているか、OLLAMA_ORIGINS が設定されているか確認してください。');
   }
 
   if (!res.ok) {

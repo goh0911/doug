@@ -285,6 +285,61 @@
 
   // ============================================================
 
+  // ※ utils/ollama.js のコピー。変更したら必ず同期すること
+  const OLLAMA_TRANSLATION_SCHEMA = {
+    type: 'array',
+    items: {
+      type: 'object',
+      properties: {
+        original: { type: 'string' },
+        translated: { type: 'string' },
+        type: { type: 'string', enum: ['speech', 'caption', 'sfx'] },
+        box: { type: 'array', items: { type: 'integer' }, minItems: 4, maxItems: 4 },
+      },
+      required: ['original', 'translated', 'type', 'box'],
+    },
+  };
+
+  function supportsThinking(showJson) {
+    const caps = showJson && showJson.capabilities;
+    return Array.isArray(caps) && caps.includes('thinking');
+  }
+
+  function buildOllamaChatBody({ model, prompt, base64, thinking = false } = {}) {
+    const body = {
+      model,
+      messages: [{ role: 'user', content: prompt, images: [base64] }],
+      stream: false,
+      format: OLLAMA_TRANSLATION_SCHEMA,
+    };
+    if (thinking) body.think = false;
+    return body;
+  }
+
+  // モデルごとの thinking 対応可否。/api/show はローカル呼び出しだが、
+  // 1 ページで何度も翻訳するので結果を持ち回る
+  const ollamaThinkingCache = new Map();
+
+  /**
+   * thinking 対応モデルに think:false を送らないと推論に入り実用にならない
+   * （実測: 文字の無いアイコン 1 枚で 539.7 秒 → think:false で 0.57 秒）。
+   * 判定できないときは false を返して think を送らない（非対応モデルを壊さない）
+   */
+  async function ollamaSupportsThinking(endpoint, model) {
+    if (ollamaThinkingCache.has(model)) return ollamaThinkingCache.get(model);
+    let thinking = false;
+    try {
+      const res = await fetch(`${endpoint}/api/show`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model }),
+      });
+      if (res.ok) thinking = supportsThinking(await res.json());
+    } catch { /* 判定できなければ送らない */ }
+    ollamaThinkingCache.set(model, thinking);
+    return thinking;
+  }
+
   async function translateWithOllamaDirect(imageDataUrl) {
     const settings = await chrome.storage.local.get({
       ollamaModel: 'qwen3.6:35b-a3b',
@@ -349,15 +404,18 @@ boxルール:
 JSON配列のみ返してください:
 [{"original":"FIVE...?","translated":"5人…？","type":"speech","box":[20,30,80,180]},{"original":"ROYAL CONSUL...","translated":"王室顧問…","type":"caption","box":[5,10,120,480]}]`;
 
+    const thinking = await ollamaSupportsThinking(endpoint, model);
     let res;
     try {
       res = await fetch(`${endpoint}/api/chat`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ model, messages: [{ role: 'user', content: prompt, images: [base64Data] }], stream: false }),
+        body: JSON.stringify(buildOllamaChatBody({ model, prompt, base64: base64Data, thinking })),
       });
     } catch (err) {
-      throw new Error(`Ollama への接続に失敗しました（${err.message}）。起動しているか・エンドポイント設定を確認してください。`);
+      throw new Error(`Ollama への接続に失敗しました（${err.message}）。Ollama が起動しているか、`
+        + `OLLAMA_ORIGINS が設定されているか（未設定だとページからのアクセスが拒否されます）、`
+        + `エンドポイント設定を確認してください。`);
     }
     if (res.status === 403) throw new Error('Ollama のアクセスが拒否されました (403)。OLLAMA_ORIGINS の設定が必要です。');
     if (res.status === 404) throw new Error(`モデル "${model}" がインストールされていません。設定画面でインストールしてください。`);
