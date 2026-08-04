@@ -151,14 +151,55 @@ API 規約（`https://comicvine.gamespot.com/api/`）の実測:
 | Give credit（リンクバック必須） | ✅ 既に出典リンクを表示している |
 | **Don't redistribute in another form**<br>"Do not **edit, manipulate** or reproduce on any other medium" | ⚠️ **LLM による翻訳・要約が該当しうる。曖昧** |
 
-最後の 1 点が未解決。見出しはデータセットの再配布を想定した書き方に見えるが、本文は広く読める。
-Comic Vine 側は「contact us when you have a prototype」と問い合わせを歓迎しているため、
-**照会すれば解消できる可能性がある。**
+#### 「翻訳は再配布にあたるか」の検討
+
+該当条項の全文:
+
+> **Don't redistribute in another form**
+> Do not edit, manipulate or reproduce on any other medium. Do not use our brand name
+> to promote your work. If you want to use our name, email us.
+
+**当たらないと読む根拠:**
+
+1. 見出しが `redistribute` に限定されており、続く文もブランド名の話。**他所での再頒布**を
+   規律する節として一貫している
+2. **帰属条項と矛盾する。** 同規約に「**On any page you use our data**, please link back to us」
+   とあり、**自製品での表示を前提**にしている。表示自体が禁止ならこの条項が意味を成さない
+3. 「Concentrate on **using the data in a unique way**」「Build something awesome」は
+   **加工を当然の前提**にしている。禁じられているのは競合データリソースの構築
+
+**それでも残るリスク:**
+
+- 翻訳は著作権法上の**二次的著作物**であり、「edit, manipulate」に該当しないとは言い切れない
+- **Comic Vine には開いたライセンスの表示が無い。** フッターは `© 2026 FANDOM, INC.
+  ALL RIGHTS RESERVED.` で、CC-BY-SA の記載を確認できなかった（API ドキュメント・
+  記事ページとも）。Fandom 本体（CC-BY-SA 明示）との重要な違い。
+  **開いたライセンスが無い以上、翻訳が二次的著作物として許諾されるという著作権法上の
+  根拠は使えず、許諾の源泉は API Terms of Use ただ一つになる**
+
+**結論: 条文だけでは判断できない。照会が必要。** 先方は
+「contact us when you have a prototype and let's figure out a way to work together」と
+明示的に問い合わせを歓迎しており、Doug は非商用・非競合・帰属表示済みという
+先方が歓迎する条件を満たしている。
 
 Comic Vine も Fandom, Inc. の所有（`© 2026 FANDOM, INC.`）だが、独自の API 規約を持つ点が本体と異なる。
 
 **未検証**: Comic Vine が実際に `Shadow Base` / `Gamma Base` / `Fortean` を収録しているか。
-API キーが必要なため本調査では確認していない。
+API キーが必要なため本調査では確認していない。**規約を詰める前にこちらを先に確認すべき。**
+
+### 5.1c 許諾申請の比較
+
+2 通同時に出すのが効率的。どちらか通れば実装に進める。
+
+| | Marvel Fandom（案 1） | Comic Vine（案 2） |
+|---|---|---|
+| 自動アクセス | ❌ 書面許諾が必要 | ✅ 公開 API で解決済み |
+| コンテンツのライセンス | ✅ CC-BY-SA。**翻訳は帰属＋継承で明示的に許諾** | ⚠️ 開いたライセンス無し（All Rights Reserved） |
+| 収録範囲 | ✅ 実測で 6/6 解決 | ❓ 未確認 |
+| 聞くべきこと | 自動アクセスの許諾 | 翻訳が「edit, manipulate」に当たるか |
+
+**許諾さえ得られれば Fandom 本体のほうが法的には明快**（CC-BY-SA のため翻訳の扱いが確定している）。
+Comic Vine は入口が広いが、翻訳の可否が規約解釈に依存する。
 
 ### 5.2 曖昧さ —— 新たに見つかった懸念
 
