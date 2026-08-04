@@ -9,6 +9,7 @@ import {
   mergeCandidates,
   sampleRecentPairs,
   buildExtractionPrompt,
+  EXTRACTION_EXISTING_LIMIT,
 } from '../../utils/nano-extract.js';
 
 // ============================================================
@@ -486,6 +487,58 @@ describe('buildExtractionPrompt - 構造', () => {
     expect(p).toContain('[SYSTEM]');
     expect(p).toContain('<<<<BEGIN_PAIRS>>>>');
     expect(p).toContain('<<<<END_PAIRS>>>>');
+  });
+});
+
+// ============================================================
+// buildExtractionPrompt - 除外リストの上限（2026-08-04 実測）
+//
+// 除外リストを全件列挙すると、用語集が育つほど抽出が壊れる。
+// 同一 5 ペア・temperature 0 / topK 1 で除外リストだけを変えた実測:
+//   60 語（全件） → 17.5s / ['LANGKOWSKI'] のみ（既存語 1 件。新規ゼロ）
+//    0 語         →  1.2s / ['LANGKOWSKI'] のみ（同上）
+//   10 語         →  3.6s / GAMMA FLIGHT・DOC DOOM・SHADOW BASE を含む 6 件 ✅
+// 全件列挙も空も同じくらい悪く、10 語前後が最良だった。
+// 重複登録の防止は mergeCandidates がコード側で行うため、削っても安全
+// （プロンプト上のリストはヒントでしかない）。
+// ============================================================
+describe('buildExtractionPrompt - 除外リストの上限', () => {
+  const pairs = [{ original: 'Hulk', translated: 'ハルク' }];
+  const many = Array.from({ length: 25 }, (_, i) => `TERM${String(i).padStart(2, '0')}`);
+
+  it('上限は 10 語', () => {
+    expect(EXTRACTION_EXISTING_LIMIT).toBe(10);
+  });
+
+  it('上限を超える除外語は新しい側だけを残す', () => {
+    const p = buildExtractionPrompt(pairs, many);
+    // 末尾 10 語（TERM15〜TERM24）は残る
+    expect(p).toContain('TERM24');
+    expect(p).toContain('TERM15');
+    // それより古い側は落とす
+    expect(p).not.toContain('TERM14');
+    expect(p).not.toContain('TERM00');
+  });
+
+  it('上限以下ならすべて列挙する', () => {
+    const p = buildExtractionPrompt(pairs, ['Ross', 'Shield', 'Titania']);
+    expect(p).toContain('Ross');
+    expect(p).toContain('Shield');
+    expect(p).toContain('Titania');
+  });
+
+  it('existing と rejected を合算したうえで上限を適用する', () => {
+    const p = buildExtractionPrompt(pairs, many.slice(0, 20), many.slice(20));
+    // rejected（最も新しい側）は必ず残る
+    expect(p).toContain('TERM24');
+    expect(p).not.toContain('TERM00');
+  });
+
+  it('除外リストが長くてもプロンプトが肥大しない', () => {
+    const short = buildExtractionPrompt(pairs, many.slice(0, 5));
+    const long = buildExtractionPrompt(pairs, many);
+    // 10 語ぶんの差に収まる（25 語ぶん膨らまない）
+    expect(long.length - short.length).toBeLessThan(120);
   });
 });
 

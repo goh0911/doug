@@ -246,6 +246,23 @@ export function sampleRecentPairs(pairs, limit = 5) {
 }
 
 /**
+ * プロンプトに載せる除外語の上限。
+ *
+ * 全件列挙すると用語集が育つほど抽出が壊れる。同一 5 ペア・temperature 0 / topK 1 で
+ * 除外リストだけを変えた実測（2026-08-04・Immortal Hulk・用語集 60 語）:
+ *   60 語（全件） → 17.5s / ['LANGKOWSKI'] のみ（既存語 1 件。新規ゼロ）
+ *    0 語         →  1.2s / ['LANGKOWSKI'] のみ（同上）
+ *   10 語         →  3.6s / GAMMA FLIGHT・DOC DOOM・SHADOW BASE を含む 6 件
+ * 全件列挙も空も同じくらい悪く、10 語前後が最良だった。空が最良でないため
+ * 「リストが長いと圧迫される」だけでは説明できず、具体的な既存語が
+ * 「この分野の固有名詞はこういう見た目・粒度」という手掛かりとして働いている可能性が高い。
+ *
+ * 削っても重複登録は起きない。既存語・却下語の除外は mergeCandidates が
+ * コード側で必ず行うため、プロンプト上のリストはヒントでしかない。
+ */
+export const EXTRACTION_EXISTING_LIMIT = 10;
+
+/**
  * 抽出用プロンプトを構築する
  * @param {Array<{ original: string, translated: string }>} pairs サニタイズ済みペア
  * @param {Array<string>} existingOriginals
@@ -254,8 +271,10 @@ export function sampleRecentPairs(pairs, limit = 5) {
  */
 export function buildExtractionPrompt(pairs, existingOriginals = [], rejectedOriginals = []) {
   const allExisting = [...new Set([...existingOriginals, ...rejectedOriginals])];
-  const existingList = allExisting.length > 0
-    ? allExisting.join(', ')
+  // 新しい側を残す。直近に出た語ほど、いま読んでいる巻の語彙に近い
+  const shownExisting = allExisting.slice(-EXTRACTION_EXISTING_LIMIT);
+  const existingList = shownExisting.length > 0
+    ? shownExisting.join(', ')
     : '（なし）';
 
   const pairsBlock = Array.isArray(pairs)
