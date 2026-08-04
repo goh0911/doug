@@ -24,6 +24,11 @@ const NO_OP_INTERVAL_MS = 60 * 1000;
 const EXTRACTION_THRESHOLD = 20;          // recentPairs がこの件数に達したら抽出予約
 const RECENT_PAIRS_MAX = 50;              // recentPairs バッファ上限
 const PAIRS_PER_TRANSLATION = 10;         // 1 翻訳あたり recentPairs に記録する件数
+// 抽出後の積み残しがこの件数以上なら続きを流す。1 回に評価するペア数
+// （background.js の EXTRACTION_PAIRS_PER_RUN）と揃えること
+const EXTRACTION_DRAIN_THRESHOLD = 10;
+// 新規候補ゼロが何回続いたらそのペアを諦めて捨てるか
+const EXTRACTION_BARREN_THRESHOLD = 3;
 const EXAMPLES_MAX = 10;                   // few-shot 例文の保持上限（Phase 6）
 // 抽出ロックのタイムアウト。background.js の EXTRACTION_NANO_TIMEOUT_MS（60 秒）より
 // 必ず長くすること。短いと処理中にロックが失効し、Service Worker 再起動をまたいで
@@ -115,6 +120,7 @@ async function getSeriesWithDefaults(seriesId) {
   if (series.extractionDue === undefined) series.extractionDue = false;
   if (series.extractionRunning === undefined) series.extractionRunning = null;
   if (series.extractionFailures === undefined) series.extractionFailures = 0;
+  if (series.extractionBarrenRuns === undefined) series.extractionBarrenRuns = 0;
   if (!Array.isArray(series.rejectedOriginals)) series.rejectedOriginals = [];
   if (!series.stats) series.stats = {};
   if (series.stats.lastExtractionAt === undefined) series.stats.lastExtractionAt = null;
@@ -350,15 +356,30 @@ export async function applyExtractionResult({ seriesId, candidates, success, con
     // ペア数上限（background.js の EXTRACTION_PAIRS_PER_RUN）で切って渡したとき、
     // 渡していない新しい側のペアまで巻き添えで消える。
     // consumedPairs 省略時は従来どおり全消去（ペア 0 件でロックだけ解放する経路など）。
+    //
+    // 新規が 1 件も取れなかったときは捨てずに末尾へ回す。Nano は既存語だけ・空配列を
+    // 返すことがあり（実測: ABOMINATION・GAMMA FLIGHT・SHADOW BASE を含む 5 ペアに対し
+    // 既存語 LANGKOWSKI 1 件のみ）、それでも success=true になるため、従来は
+    // 該当ペアが消費されて二度と抽出対象にならなかった。回せば別の語と組み合わせて
+    // 再挑戦できる。ただし同じ材料で延々と回らないよう、空振りが続いたら諦めて捨てる。
     const pairs = Array.isArray(series.recentPairs) ? series.recentPairs : [];
+    const barren = added === 0 && pairs.length > 0;
+    const barrenRuns = barren ? (series.extractionBarrenRuns ?? 0) + 1 : 0;
+    const giveUp = barrenRuns >= EXTRACTION_BARREN_THRESHOLD;
+
     if (typeof consumedPairs === 'number' && consumedPairs >= 0) {
-      pairs.splice(0, consumedPairs);
+      const taken = pairs.splice(0, consumedPairs);
+      if (barren && !giveUp) pairs.push(...taken);
       series.recentPairs = pairs;
     } else {
       series.recentPairs = [];
     }
-    // 積み残しが閾値以上あるなら次回の翻訳記録でもう一度走らせる
-    series.extractionDue = series.recentPairs.length >= EXTRACTION_THRESHOLD;
+    series.extractionBarrenRuns = giveUp ? 0 : barrenRuns;
+    // 積み残しが 1 回ぶんあるなら次回の翻訳記録で続きを流す。
+    // 従来は EXTRACTION_THRESHOLD（20）で判定していたため、20 件で起動しても
+    // 評価するのは古い側 10 件だけで、残り 10 件はさらに 10 件以上積まれるまで
+    // 抽出対象にならず滞留していた。
+    series.extractionDue = series.recentPairs.length >= EXTRACTION_DRAIN_THRESHOLD;
     series.extractionFailures = 0;
     series.extractionRunning = null;
     series.stats = {

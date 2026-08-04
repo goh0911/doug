@@ -1095,8 +1095,13 @@ describe('applyExtractionResult - success', () => {
       rejectedOriginals: [],
     };
 
+    // 新規が取れたときの消費を見るテストなので候補を 1 件渡す。
+    // 空配列だと「新規ゼロなら捨てずに末尾へ回す」経路に入り、切る向きを検証できない
     await applyExtractionResult({
-      seriesId: 'ex002b', candidates: [], success: true, consumedPairs: 20,
+      seriesId: 'ex002b',
+      candidates: [{ original: 'Thor', translated: 'ソー' }],
+      success: true,
+      consumedPairs: 20,
     });
 
     const series = await getSeries('ex002b');
@@ -1104,7 +1109,7 @@ describe('applyExtractionResult - success', () => {
     // 残るのは新しい側（p20〜p49）。長さだけでは切る向きの誤りを検出できない
     expect(series.recentPairs[0].original).toBe('p20');
     expect(series.recentPairs[29].original).toBe('p49');
-    // 積み残しが閾値（20）以上あるので次回も走らせる
+    // 積み残しが 1 回ぶん以上あるので次回も走らせる
     expect(series.extractionDue).toBe(true);
   });
 
@@ -1194,6 +1199,164 @@ describe('applyExtractionResult - failure', () => {
     await applyExtractionResult({ seriesId: 'ex005', candidates: [], success: false });
     const series = await getSeries('ex005');
     expect(series.extractionFailures).toBe(3);
+    expect(series.extractionDue).toBe(false);
+  });
+});
+
+// ============================================================
+// 新規候補ゼロのときにペアを捨てない（2026-08-04 調査）
+//
+// Nano が既存語だけ／空配列を返しても success=true になり、渡した 10 ペアが
+// 消費されて永久に失われていた。実測で、ABOMINATION・GAMMA FLIGHT・SHADOW BASE を
+// 含む 5 ペアに対し Nano が既存語 LANGKOWSKI 1 件しか返さない事象を確認している。
+// この経路だと該当ペアは二度と抽出対象にならない。
+// 新規ゼロなら消費せず末尾へ回し、別の語と組み合わせて再挑戦させる。
+// ただし無限に回らないよう EXTRACTION_BARREN_THRESHOLD 回で諦めて捨てる。
+// ============================================================
+describe('applyExtractionResult - 新規候補ゼロ', () => {
+  function seedPairs(id, count) {
+    const now = Date.now();
+    _store[`series:${id}`] = {
+      meta: { name: 'Test' },
+      glossary: { ja: { EXISTING: { translated: '既存', approved: false } } },
+      stats: {},
+      recentPairs: Array.from({ length: count }, (_, i) => ({
+        original: `p${i}`, translated: `訳${i}`, at: now + i,
+      })),
+      extractionDue: true,
+      extractionRunning: { startedAt: now },
+      extractionFailures: 0,
+      rejectedOriginals: [],
+    };
+  }
+
+  it('新規ゼロならペアを消費せず末尾へ回す', async () => {
+    const { applyExtractionResult, getSeries } = await loadStore();
+    seedPairs('bar001', 25);
+
+    // 既存語だけを返す＝新規 0 件
+    await applyExtractionResult({
+      seriesId: 'bar001',
+      candidates: [{ original: 'EXISTING', translated: '既存' }],
+      success: true,
+      consumedPairs: 10,
+    });
+
+    const series = await getSeries('bar001');
+    expect(series.recentPairs).toHaveLength(25);          // 失われない
+    expect(series.recentPairs[0].original).toBe('p10');   // 先頭は 11 件目に進む
+    expect(series.recentPairs[24].original).toBe('p9');   // 回した 10 件は末尾へ
+  });
+
+  it('候補が空配列でも同様にペアを保持する', async () => {
+    const { applyExtractionResult, getSeries } = await loadStore();
+    seedPairs('bar002', 25);
+
+    await applyExtractionResult({
+      seriesId: 'bar002', candidates: [], success: true, consumedPairs: 10,
+    });
+
+    const series = await getSeries('bar002');
+    expect(series.recentPairs).toHaveLength(25);
+    expect(series.extractionBarrenRuns).toBe(1);
+  });
+
+  it('新規ゼロが続いても閾値で打ち切って消費する', async () => {
+    const { applyExtractionResult, getSeries } = await loadStore();
+    seedPairs('bar003', 25);
+    _store['series:bar003'].extractionBarrenRuns = 2; // すでに 2 回空振り
+
+    await applyExtractionResult({
+      seriesId: 'bar003', candidates: [], success: true, consumedPairs: 10,
+    });
+
+    const series = await getSeries('bar003');
+    expect(series.recentPairs).toHaveLength(15);          // 諦めて捨てる
+    expect(series.extractionBarrenRuns).toBe(0);
+  });
+
+  it('新規が 1 件でもあれば従来どおり消費し空振り数をリセットする', async () => {
+    const { applyExtractionResult, getSeries } = await loadStore();
+    seedPairs('bar004', 25);
+    _store['series:bar004'].extractionBarrenRuns = 2;
+
+    await applyExtractionResult({
+      seriesId: 'bar004',
+      candidates: [{ original: 'Thor', translated: 'ソー' }],
+      success: true,
+      consumedPairs: 10,
+    });
+
+    const series = await getSeries('bar004');
+    expect(series.recentPairs).toHaveLength(15);
+    expect(series.recentPairs[0].original).toBe('p10');
+    expect(series.extractionBarrenRuns).toBe(0);
+  });
+});
+
+// ============================================================
+// 抽出後に積み残しがあれば続けて抽出する（2026-08-04 調査）
+//
+// 従来は抽出後の extractionDue を EXTRACTION_THRESHOLD（20）で判定していた。
+// 20 件で起動しても 1 回に評価するのは古い側 10 件だけなので、残り 10 件は
+// さらに 10 件以上の新規ペアが積まれるまで抽出対象にならず滞留していた。
+// 1 回ぶん（10 件）残っていれば次の翻訳で続きを流す。
+// ============================================================
+describe('applyExtractionResult - 積み残しの継続', () => {
+  it('消費後に 1 回ぶん残っていれば extractionDue を維持する', async () => {
+    const { applyExtractionResult, getSeries } = await loadStore();
+    const now = Date.now();
+    _store['series:drain01'] = {
+      meta: { name: 'Test' },
+      glossary: { ja: {} },
+      stats: {},
+      recentPairs: Array.from({ length: 27 }, (_, i) => ({
+        original: `p${i}`, translated: `訳${i}`, at: now + i,
+      })),
+      extractionDue: true,
+      extractionRunning: { startedAt: now },
+      extractionFailures: 0,
+      rejectedOriginals: [],
+    };
+
+    await applyExtractionResult({
+      seriesId: 'drain01',
+      candidates: [{ original: 'Thor', translated: 'ソー' }],
+      success: true,
+      consumedPairs: 10,
+    });
+
+    const series = await getSeries('drain01');
+    expect(series.recentPairs).toHaveLength(17);
+    // 従来は 17 < 20 のため false になり、積み残しが滞留していた
+    expect(series.extractionDue).toBe(true);
+  });
+
+  it('1 回ぶんに満たなければ extractionDue を下ろす', async () => {
+    const { applyExtractionResult, getSeries } = await loadStore();
+    const now = Date.now();
+    _store['series:drain02'] = {
+      meta: { name: 'Test' },
+      glossary: { ja: {} },
+      stats: {},
+      recentPairs: Array.from({ length: 19 }, (_, i) => ({
+        original: `p${i}`, translated: `訳${i}`, at: now + i,
+      })),
+      extractionDue: true,
+      extractionRunning: { startedAt: now },
+      extractionFailures: 0,
+      rejectedOriginals: [],
+    };
+
+    await applyExtractionResult({
+      seriesId: 'drain02',
+      candidates: [{ original: 'Thor', translated: 'ソー' }],
+      success: true,
+      consumedPairs: 10,
+    });
+
+    const series = await getSeries('drain02');
+    expect(series.recentPairs).toHaveLength(9);
     expect(series.extractionDue).toBe(false);
   });
 });
