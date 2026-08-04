@@ -184,8 +184,88 @@ API 規約（`https://comicvine.gamespot.com/api/`）の実測:
 
 Comic Vine も Fandom, Inc. の所有（`© 2026 FANDOM, INC.`）だが、独自の API 規約を持つ点が本体と異なる。
 
-**未検証**: Comic Vine が実際に `Shadow Base` / `Gamma Base` / `Fortean` を収録しているか。
-API キーが必要なため本調査では確認していない。**規約を詰める前にこちらを先に確認すべき。**
+#### 実測（2026-08-04・ユーザーの API キーで実行）
+
+**収録範囲は Wikipedia の穴をほぼ埋める。ただし検索精度は低く、出版社ゲートが必須。**
+
+用語集の実際の語（コードネーム・略称のまま）で `resources=character,location,team,concept`・
+`limit=1` を投げた結果、**12 語中 5 語が誤答**だった:
+
+| 語 | 第 1 候補 | 判定 |
+|---|---|---|
+| ABOMINATION | 「Voltron Force と戦う Krell 星の巨大生物」 | ❌ Lion Forge Comics |
+| DOOM | 「豪邸破壊を盾に富豪を強請る」 | ❌ DC Comics |
+| WALT | 「Mom's eldest son.」 | ❌ Bongo（Simpsons） |
+| BANNER | 「Bar Sinister の登場人物」 | ❌ Valiant/Acclaim |
+| TONY STARK | Tony Stark (Amalgam) | ❌ 別世界線 |
+
+`ABOMINATION` は象徴的で、**Wikipedia が完全一致で正解を返す語**を Comic Vine は Voltron の敵にした。
+評価メモ §1.2「誤った情報は無情報より悪い」に真正面から抵触する。
+
+#### 出版社ゲートで救える
+
+`field_list=publisher` で **`publisher` が構造化フィールドとして返る**（Wikipedia のように
+導入節から推測する必要がない）。`limit=5` で取り直し、出版社と名前で絞ると全件救えた:
+
+| 語 | 却下される誤答 | 採用される候補 |
+|---|---|---|
+| ABOMINATION | 1位 Lion Forge | **2位 Abomination \| Marvel**（Emil Blonsky） ✅ |
+| DOOM | 1位 DC、4位 Company-Licensed | **3位 Doctor Doom \| Marvel** ✅ |
+| TONY STARK | 1位 Amalgam | **2位 Iron Man \| Marvel**（deck 冒頭が "Tony Stark was…"） ✅ |
+| SHADOW BASE | — | **1位 Shadow Base \| Marvel (team)** ✅ |
+| RED HULK | — | **1位 Thunderbolt Ross \| Marvel** ✅ |
+| WALT | Bongo / Guǎngdōng / Le Lombard / Conundrum | Marvel の Walt は **deck が空 → 何も出さない**（正しい） |
+| BANNER | Valiant / DC | Marvel に完全一致なし。Brian Banner は**完全一致必須で落とす**（正しい） |
+
+**出版社だけでは足りない。** `DOOM` の 2 位は `T'Channa | Marvel` で、出版社は一致するが
+Doom と無関係。Wikipedia 側の `termAppearsIn` に相当する名前照合が必要:
+
+1. **出版社一致** — `expectedPublisher(host)` をそのまま流用できる
+2. **名前照合** — `name` が語として term を含む、または `deck` の主語が term
+3. **`deck` が非空かつ十分な長さ**
+
+#### Wikipedia のゲートが落とす語を拾える
+
+- `TONY STARK`: Wikipedia は *Iron Man* の第 1 文の主語が "Iron Man" のため却下。
+  **Comic Vine の deck は「Tony Stark was the arrogant son of…」で主語が Tony Stark なので通る**
+- `RED HULK`: 同様に Wikipedia では却下、Comic Vine は 1 位で `Thunderbolt Ross` を返す
+
+`2026-08-04-gloss-recall-investigation.md` で「ゲートを緩めても増えるのは 4 語」とした
+その 4 語のうち 2 語がここで解決する。
+
+#### `deck` の品質
+
+一行要約であり、Wikipedia の節抽出（R-W2''）も Fandom の wikitext パースも不要。
+`resource_type` で character / location / team / concept が判別でき、
+Wikipedia では推測するしかなかった型情報が構造化されている。
+HTML エンティティ（`&amp;`）が含まれるため復号が要る。
+
+#### robots.txt の Content-Signal
+
+```
+User-agent: *
+Content-Signal: search=yes, ai-train=no, use=reference
+Allow: /
+```
+
+| シグナル | 値 | Doug への影響 |
+|---|---|---|
+| `search` | yes | 短い抜粋の提示は許可 |
+| `ai-train` | **no** | 学習・微調整は禁止 → **Doug は学習しない。抵触しない** |
+| `ai-input` | **記載なし** | RAG 等。規定(c)により「許諾も制限もしない」 |
+
+**運営者は AI 用途を意識したうえで、禁じたのは学習だけ。** `ai-input` は定義が存在するのに
+あえて `no` を置いていない。照会メールで使える材料。
+
+個別 AI クローラ（GPTBot / ClaudeBot / CCBot / Google-Extended 等）は `Disallow` だが、
+これらは**学習用クローラ**であり、ユーザー操作を起点に語単位で取得する Doug とは性質が異なる。
+
+#### CORS
+
+`access-control-allow-origin` は返らない（CORS 無効）。ただし **MV3 の Service Worker は
+`host_permissions` があれば CORS を迂回する**ため `background.js` からは呼べる。
+Gemini / Claude / OpenAI と同じ経路であり新しい問題ではない。
+Wikipedia と同様に明示的な権限リクエストにするのが筋。
 
 ### 5.1c 許諾申請の比較
 
