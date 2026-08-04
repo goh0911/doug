@@ -161,6 +161,45 @@ Codex によるセカンドオピニオンで、私が見落としていた経�
 - **ゲートの recall**（BANNER / RED HULK / TONY STARK / SHIELD の 4 語）: 精度との
   トレードオフが直撃するため、フィクスチャを増やしてから着手する。
 
+### 修正後の実機測定（2026-08-04）
+
+抽出（Nano・同一 5 ペア）:
+
+| | 修正前 | 修正後 |
+|---|---|---|
+| プロンプト | 2373 字 | 1746 字 |
+| 抽出結果 | `LANGKOWSKI` のみ | `LANGKOWSKI` `DOC DOOM` `GAMMA FLIGHT` `HULK` `SHADOW BASE` `SITE B` |
+
+新規登録される 4 語について、実際に Wikipedia を引いてゲートを通したところ:
+
+| 語 | シリーズ名あり | シリーズ名なし | 解説が出るか |
+|---|---|---|---|
+| GAMMA FLIGHT | Sasquatch (comics) ❌ | **Gamma Flight ✅ 完全一致** | **出る** |
+| SHADOW BASE | The Immortal Hulk ❌ | Leader (character) ❌ | 出ない（記事なし） |
+| DOC DOOM | ヒット 0 件 | Doctor Doom ❌ | 出ない（愛称のため照合失敗） |
+| SITE B | The Immortal Hulk ❌ | Jurassic Park (franchise) ❌ | 出ない（ノイズ・却下が正しい） |
+| **ABOMINATION** | **Abomination (character) ✅** | **Abomination (character) ✅** | **抽出さえされれば出る** |
+
+**正味の増加は GAMMA FLIGHT の 1 語。** ABOMINATION はゲート側の準備が整っており、
+抽出できれば 2 語目になる。
+
+### 判明した本質的な上限
+
+不満の対象だった語の多くは、**en Wikipedia に記事が存在しない**:
+
+- SHADOW BASE / SITE B（Immortal Hulk 固有の施設）
+- FORTEAN / GENERAL FORTEAN（本作の登場人物）
+- GAMMA BASE / ALPHA FLIGHT SPACE STATION
+- DOC GREEN（別名）
+
+これらは Marvel Fandom には記事があるが Wikipedia には無い。
+`docs/plans/2026-07-27-fandom-popup-evaluation.md` §51 で
+「Wikipedia をメイン、Marvel/DC Fandom をサブ」とする構成が決定済みだが、
+実装は Wikipedia 単独のまま（`background.js` の `GLOSS_SOURCES = [wikipediaSource]`）。
+
+**当たり率の天井は Wikipedia のコミック細部に対する収録率で決まっており、
+抽出とゲートをいくら改善してもこの天井は超えられない。**
+
 ### 検証状況
 
 - 単体テスト **621 件 green**（修正前 610 件 → 新規 11 件追加）
