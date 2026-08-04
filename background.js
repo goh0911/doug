@@ -26,6 +26,7 @@ import {
   extractIntro, extractPowers, passesGate, buildPageUrl, isExactTitleMatch, expectedPublisher,
   isTransientHttpStatus, isTransientApiError,
 } from './utils/wiki-source.js';
+import * as CV from './utils/comicvine-source.js';
 import { buildGlossPrompt, parseGlossResponse } from './utils/gloss-summary.js';
 import { sanitizePairForNano, parseCandidatesJson, buildExtractionPrompt } from './utils/nano-extract.js';
 import { isUsable } from './utils/gloss-cache.js';
@@ -492,7 +493,70 @@ const wikipediaSource = {
   fetchEntry: fetchWikipediaEntry,
 };
 
-const GLOSS_SOURCES = [wikipediaSource];
+/**
+ * Comic Vine から 1 語ぶんの素材を取る。サブソース（Wikipedia が記事を持たない
+ * 作品固有の施設・組織・脇役を補う）。API キー未設定なら何もせず miss を返す。
+ *
+ * Wikipedia と違いシリーズ名は使わない。Comic Vine の検索はシリーズ名を足すと
+ * ノイズになるうえ、出版社が構造化フィールドで返るため曖昧さ回避が別途効く。
+ */
+async function fetchComicVineEntry(term, _seriesName, publisher) {
+  const { comicvineApiKey = '' } = await chrome.storage.local.get('comicvineApiKey').catch(() => ({}));
+  const url = CV.buildSearchUrl(term, comicvineApiKey);
+  if (!url) return { material: null, transient: false }; // キー未設定＝この経路は使わない
+
+  if (Date.now() < glossFetchCooldownUntil) return { material: null, transient: true };
+
+  await glossFetchSemaphore.acquire();
+  if (Date.now() < glossFetchCooldownUntil) {
+    glossFetchSemaphore.release();
+    return { material: null, transient: true };
+  }
+
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), GLOSS_FETCH_TIMEOUT_MS);
+  let json = null;
+  try {
+    const res = await fetch(url, { signal: controller.signal });
+    if (!res.ok) {
+      console.debug('[gloss] ComicVine HTTP', res.status, term);
+      if (!isTransientHttpStatus(res.status)) return { material: null, transient: false };
+      glossFetchCooldownUntil = Date.now() + retryAfterMs(res.headers.get('Retry-After'));
+      return { material: null, transient: true };
+    }
+    json = await res.json();
+  } catch {
+    return { material: null, transient: true };
+  } finally {
+    clearTimeout(timeoutId);
+    glossFetchSemaphore.release();
+  }
+
+  // Comic Vine は HTTP 200 のまま status_code でエラーを返す（107 = レート制限）
+  const parsed = CV.parseSearchResponse(json);
+  if (parsed.status === 'transient') {
+    console.debug('[gloss] ComicVine rate limited', term);
+    glossFetchCooldownUntil = Date.now() + retryAfterMs(null);
+    return { material: null, transient: true };
+  }
+  if (parsed.status !== 'ok') return { material: null, transient: false };
+
+  // 素の検索は 12 語中 5 語が誤答する（Voltron の Abomination 等）。
+  // ゲートを通さずに採用してはいけない
+  const hit = CV.pickBestResult(parsed.results, term, publisher);
+  return { material: hit ? CV.toMaterial(hit) : null, transient: false };
+}
+
+const comicVineSource = {
+  id: CV.SOURCE_ID,
+  origin: CV.COMICVINE_ORIGIN,
+  fetchEntry: fetchComicVineEntry,
+};
+
+// 順序が意味を持つ。Wikipedia を先に引く（百科事典的な通史が書かれており、
+// 主要キャラでは Comic Vine より記述が厚い）。Comic Vine は Wikipedia が
+// 記事を持たない語だけを拾うサブソースとして後ろに置く
+const GLOSS_SOURCES = [wikipediaSource, comicVineSource];
 
 /** URL からホスト名を取り出す（取れなければ空文字） */
 function hostOf(url) {

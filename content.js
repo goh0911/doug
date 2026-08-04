@@ -1690,6 +1690,9 @@
   // content.js は Classic Script で import できないため、この対応表だけは複製する
   const GLOSS_SOURCES = {
     'en-wikipedia': { host: 'en.wikipedia.org', label: 'Wikipedia (CC BY-SA)' },
+    // Comic Vine は API 利用規約が出典へのリンクバックを必須にしている
+    // （"On any page you use our data, please link back to us."）。ここを消さないこと
+    'comicvine': { host: 'comicvine.gamespot.com', label: 'Comic Vine' },
   };
 
   // 解説の生成結果（原語 → { identity, powers, url, source }）と、

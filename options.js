@@ -4,6 +4,7 @@ const $ = (id) => document.getElementById(id);
 
 // utils/wiki-source.js の WIKIPEDIA_ORIGIN と同一値（options.js は module ではないため直書き）
 const WIKIPEDIA_ORIGIN = 'https://en.wikipedia.org/*';
+const COMICVINE_ORIGIN = 'https://comicvine.gamespot.com/*';
 
 let isPulling = false;
 
@@ -240,6 +241,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     imagePreprocess: true,
     glossEnabled: false,
     glossEngine: 'auto',
+    comicvineApiKey: '',
   });
 
   $('apiProvider').value = settings.apiProvider;
@@ -258,6 +260,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   const glossHasPermission = await chrome.permissions.contains({ origins: [WIKIPEDIA_ORIGIN] }).catch(() => false);
   $('glossEnabled').checked = settings.glossEnabled && glossHasPermission;
   $('glossEngine').value = settings.glossEngine;
+  $('comicvineApiKey').value = settings.comicvineApiKey;
 
   updateProviderUI(settings.apiProvider);
 
@@ -321,6 +324,44 @@ document.addEventListener('DOMContentLoaded', async () => {
     await chrome.storage.local.set({ glossEngine: $('glossEngine').value });
   });
 
+  // Comic Vine APIキー: 入力が確定したら権限を要求し、テスト呼び出しで検証してから保存する。
+  // 未設定でも Wikipedia だけで動くため、失敗しても他の設定は巻き込まない
+  $('comicvineApiKey').addEventListener('change', async () => {
+    const key = $('comicvineApiKey').value.trim();
+    const status = $('comicvineStatus');
+    if (key === '') {
+      await chrome.storage.local.set({ comicvineApiKey: '' });
+      status.textContent = '';
+      return;
+    }
+
+    // 権限要求はユーザー操作の直後でないと失敗するため、await を挟まず先に呼ぶ
+    let granted = false;
+    try {
+      granted = await chrome.permissions.request({ origins: [COMICVINE_ORIGIN] });
+    } catch (err) {
+      status.textContent = '権限の取得に失敗しました: ' + err.message;
+      return;
+    }
+    if (!granted) {
+      status.textContent = 'comicvine.gamespot.com へのアクセスが許可されなかったため、保存していません';
+      return;
+    }
+
+    status.textContent = 'キーを検証しています…';
+    const ok = await verifyComicVineKey(key);
+    if (ok === true) {
+      await chrome.storage.local.set({ comicvineApiKey: key });
+      status.textContent = 'キーを確認しました。Wikipedia に無い語を Comic Vine で補います';
+    } else if (ok === 'invalid') {
+      status.textContent = 'キーが無効です。保存していません';
+    } else {
+      // 通信断・レート制限は「無効」と断定できない。保存はするが結果は伝える
+      await chrome.storage.local.set({ comicvineApiKey: key });
+      status.textContent = '検証できませんでした（通信エラーかレート制限）。キーは保存しました';
+    }
+  });
+
   // シリーズ管理を開く
   document.getElementById('openSeriesManagerBtn')?.addEventListener('click', () => {
     chrome.tabs.create({ url: chrome.runtime.getURL('series.html') });
@@ -366,6 +407,28 @@ document.addEventListener('DOMContentLoaded', async () => {
     showStatus('設定を保存しました', 'ok');
   });
 });
+
+/**
+ * Comic Vine のキーを 1 件だけ検索して検証する。
+ * Comic Vine は HTTP 200 のまま status_code でエラーを返す（100 = Invalid API Key）
+ * @returns {Promise<true|'invalid'|'unknown'>}
+ */
+async function verifyComicVineKey(key) {
+  const params = new URLSearchParams({
+    api_key: key, format: 'json', query: 'hulk',
+    resources: 'character', field_list: 'name', limit: '1',
+  });
+  try {
+    const res = await fetch(`https://comicvine.gamespot.com/api/search/?${params.toString()}`);
+    if (!res.ok) return 'unknown';
+    const json = await res.json();
+    if (json && json.status_code === 1) return true;
+    if (json && json.status_code === 100) return 'invalid';
+    return 'unknown';
+  } catch {
+    return 'unknown';
+  }
+}
 
 const _statusTimers = new WeakMap();
 

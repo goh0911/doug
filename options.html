@@ -128,6 +128,17 @@
         <option value="nano">Chrome内蔵AIのみ（APIキーを消費しない）</option>
         <option value="api">翻訳用APIのみ（品質優先）</option>
       </select>
+
+      <label for="comicvineApiKey" style="margin-top:12px">Comic Vine APIキー（任意）:</label>
+      <div class="field-with-toggle">
+        <input type="password" id="comicvineApiKey" placeholder="未設定でもWikipediaだけで動作します">
+        <button class="btn-icon toggle-key-btn" data-target="comicvineApiKey" title="表示/非表示">👁</button>
+      </div>
+      <div class="field-hint">
+        <a href="https://comicvine.gamespot.com/api/" target="_blank" rel="noopener noreferrer">APIキーを取得</a>（無料・要ログイン）。
+        Wikipedia に記事が無い作品固有の施設・組織・脇役を補います。未設定でも従来どおり動作します。
+      </div>
+      <div id="comicvineStatus" class="field-hint"></div>
     </div>
 
     <div class="section" id="whitelistSection" style="display:none">
