@@ -8,14 +8,17 @@
 
 ## 0. 結論
 
-**§51.2-1 の「名前解決が未解決」は解ける。§46.4 の転送量の懸念は本件では成立しない。
-残る障害は ToS の 1 点のみで、これは技術判断ではない。**
+**技術的な障害はすべて解消した。しかし ToS が明確に禁じているため、
+書面許諾を得ない限り実装してはならない。**
 
 | §51.2 のブロッカー | 本調査の結果 |
 |---|---|
 | 1. 名前解決（コードネーム → 正典ページ） | ✅ **解決。** `action=opensearch` で 4/4 到達 |
-| 2. 最新連載状態（ネタバレ・時代違い） | ⚠️ **未解決。** ただし施設・組織では影響が小さい可能性 |
-| 3. ToS（自動アクセスに書面許諾） | ❌ **未解決。** 原文を取得できず（Cloudflare 403） |
+| 2. 最新連載状態（ネタバレ・時代違い） | ⚠️ 未測定。施設・組織では影響が小さい可能性 |
+| 3. ToS（自動アクセスに書面許諾） | ❌ **原文で確認。明確に禁止されている（§5.1）** |
+
+皮肉な結果になった。§46.3 が「決定的な障害」としていた技術的問題は解けたが、
+§49 が「原文未確認」として保留していた規約の問題のほうが本物だった。
 
 ## 1. 前提が変わった —— 埋めるべき穴の性質
 
@@ -96,14 +99,66 @@ Fandom を引く必要がない。実際に Fandom を引きたい語のサイ�
 
 ## 5. 残る障害
 
-### 5.1 ToS（未解決・技術で解けない）
+### 5.1 ToS —— 確認済み。**実装不可**
 
-`https://www.fandom.com/terms-of-use` は **HTTP 403**（Cloudflare）で原文を取得できなかった。
-`marvel.fandom.com/robots.txt` も `api.php` に関する記述を確認できなかった。
-§49 の「ToS が自動アクセス全般に書面許諾を要求（原文未確認）」は**依然として未確認のまま**。
+当初は `https://www.fandom.com/terms-of-use` が Cloudflare 403 で取得できなかったが、
+**ユーザーが原文を提示したことで確認できた**（Date of Last Revision: December 19, 2025）。
+§49 の推測は正しかった。「User conduct」節に以下がある:
 
-**これは実装の可否を決める前提であり、判断はユーザーに委ねる。**
-選択肢は §50 のとおり ① 許諾を申請する ② 使わない ③ Wikipedia で代替する。
+> Use any robot, spider, site search and/or retrieval application, or other device to
+> **scrape, extract, retrieve or index any portion of the content**;
+
+> not use any robot, spider, scraper or **other automated means to access the Services
+> for any purpose without our express written permission**;
+
+> **Without our express, prior written consent**, use or copy the content for the
+> development of any software program, including, but not limited to, training a
+> machine learning or artificial intelligence (AI) system
+
+**拡張機能から `api.php` を叩く行為は「automated means to access the Services」に該当する。
+MediaWiki API に対する例外は無い。** `robots.txt` の Allow は ToS に劣後する（§49 の判断どおり）。
+
+第 1 条項には除外規定があるが、これは適用されない:
+
+> Except as expressly permitted by the Company (for example with respect to the use of
+> text content ... as permitted as set forth at our licensing page)
+
+licensing page＝CC-BY-SA が定めるのは**入手した後のテキストの扱い**であって**入手の方法**ではない。
+自動アクセスの禁止は独立した条項であり、コンテンツのライセンスでは解除されない。
+
+**結論: 書面許諾なしに実装してはならない。** 連絡先は `support@fandom.com`。
+
+なお本調査で送信した 14 リクエスト（§8）もこの条項に抵触する。原文が取得できない状態での
+評価目的の少量アクセスだったが、規約が判明した以降は自動アクセスを行わない。
+
+### 5.1b 代替候補 —— Comic Vine（要検討・別調査）
+
+評価メモ §41 は Comic Vine を「キー必須のため拡張に組み込めない」として却下したが、
+**この論拠は現在の Doug には当てはまらない。** Doug はすでに「ユーザーが自分の API キーを
+入れる」設計であり（manifest の説明文にも明記）、負担は既に受け入れられている。
+
+さらに重要な点として、**公開 API を提供していること自体が express permission にあたる。**
+Fandom 本体を塞いでいた「許諾されていない自動アクセス」の問題は発生しない。
+
+API 規約（`https://comicvine.gamespot.com/api/`）の実測:
+
+| 条項 | Doug への影響 |
+|---|---|
+| 公開 API・キー登録制 | ✅ 自動アクセスの許諾問題が解消 |
+| Non-commercial use only | ✅ Doug は無料 |
+| 200 req/resource/hour・キャッシュ推奨 | ✅ 解説は 30 語/回・キャッシュ済み |
+| Don't build a competing product | ✅ 翻訳ツールであり wiki ではない |
+| Give credit（リンクバック必須） | ✅ 既に出典リンクを表示している |
+| **Don't redistribute in another form**<br>"Do not **edit, manipulate** or reproduce on any other medium" | ⚠️ **LLM による翻訳・要約が該当しうる。曖昧** |
+
+最後の 1 点が未解決。見出しはデータセットの再配布を想定した書き方に見えるが、本文は広く読める。
+Comic Vine 側は「contact us when you have a prototype」と問い合わせを歓迎しているため、
+**照会すれば解消できる可能性がある。**
+
+Comic Vine も Fandom, Inc. の所有（`© 2026 FANDOM, INC.`）だが、独自の API 規約を持つ点が本体と異なる。
+
+**未検証**: Comic Vine が実際に `Shadow Base` / `Gamma Base` / `Fortean` を収録しているか。
+API キーが必要なため本調査では確認していない。
 
 ### 5.2 曖昧さ —— 新たに見つかった懸念
 
@@ -134,16 +189,33 @@ Wikipedia 用のものはそのままでは使えない（`/comic/i` の判定�
 
 ## 7. 推奨
 
-**技術的には着手可能な状態になった。** §51.3 が「サブは名前解決を検証してからでないと
-着手できない」としていた依存関係は解消している。
+**Marvel Fandom の直接参照は実装しない。** ToS が明確に禁じており、技術で解ける問題ではない。
 
-ただし **ToS が未確認のまま実装に進むべきではない。** 順序としては:
+選べる道は 3 つある。いずれも技術判断ではないため、着手はユーザーの決定を要する。
 
-1. Fandom の利用規約の原文を確認する（ブラウザで手動アクセス）
-2. 自動アクセスが許諾を要するなら、申請するか断念するかを決める
-3. 許諾が得られた場合にのみ実装に着手する
+### 案 1: Fandom に許諾を申請する
 
-実装時の設計は §48 の 4 段構成をベースに、本調査の測定で以下を差し替える:
+`support@fandom.com` に用途を説明して書面許諾を求める。無料で、通れば §1〜4 の
+測定がそのまま活きる（技術的な準備は完了している）。返答が得られない・拒否される
+可能性はある。
+
+### 案 2: Comic Vine を評価する（推奨）
+
+§5.1b のとおり、公開 API を持つため自動アクセスの許諾問題が発生しない。
+残る曖昧さは "Do not edit, manipulate..." の 1 点で、これも問い合わせで解消しうる。
+
+先に確認すべきは**規約ではなくデータ**。`Shadow Base` / `Gamma Base` / `Fortean` を
+実際に収録しているかが分からなければ、規約を詰める意味がない。API キーの登録が要る。
+
+### 案 3: Wikipedia の天井を受け入れる
+
+作品固有の施設・脇役には解説を出さない。現状維持。
+`utils/wiki-source.js` の検証ゲートは正しく機能しており、**誤った解説は出ていない**
+（2026-08-04 の調査で確認）。「無情報は誤情報より良い」という評価メモ §1.2 の原則には適う。
+
+### 実装時の設計（許諾が得られた場合のみ）
+
+§48 の 4 段構成をベースに、本調査の測定で以下を差し替える:
 
 - ① の「en Wikipedia で本名を取得」は**不要**。`opensearch` が直接正典を返す
 - ② の対象フィールドは `Powers` / `Abilities` に加えて `History` を含める
