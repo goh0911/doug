@@ -492,27 +492,14 @@
     // （課金防止そのものは background.js の nanoOnly ゲートが担保する）
     const { glossEngine = 'auto' } = await chrome.storage.local.get('glossEngine');
     if (glossEngine === 'api') return;
-    const langMap = (series.glossary && series.glossary[targetLang]) || {};
-    // 解説ポップアップは未承認候補（Nano 自動抽出の approved:false）も対象にする。
-    // 層B置換（utils/glossary-substitute.js）が approved を要求するのは訳文を書き換えるためで、
-    // 解説は誤った語なら background 側の検証ゲートで落ちて何も表示されない。危険度が違う。
-    // ※ 層B置換側の approved ゲートは維持すること（訳文汚染を防ぐ唯一の関門）
-    // 先読みは background 側で nanoOnly:true なので、この経路から課金は発生しない
-    const terms = Object.keys(langMap).filter((k) => {
-      const e = langMap[k];
-      return e && typeof e.translated === 'string' && e.translated !== '';
-    });
-    if (terms.length === 0) return;
-    // 応答を待つ前に控える。background は生成できた語から GLOSS_DEFS_PARTIAL を
-    // 送ってくるので、バッチが返る前に到着する
-    currentGlossLangMap = langMap;
+    // 先読みは background 側でモデルを温めるだけになった（語の解説は作らない）。
+    // 全語ぶんの生成は直列で数十秒かかり、翻訳後の要求をロックの後ろで待たせて
+    // いたため（詳細は background.js の PREFETCH_GLOSS_DEFS ハンドラ）。
+    // 語ごとの解説は loadGlossDefs が「いまページに出ている語」だけ作る。
     chrome.runtime.sendMessage({
       type: 'PREFETCH_GLOSS_DEFS',
       seriesId: series.seriesId,
-      seriesName: series.name,
-      terms,
       targetLang,
-      langLabel: LANG_LABELS[targetLang] || '日本語',
     }).catch(() => { /* 失敗は表示しない */ });
   }
 

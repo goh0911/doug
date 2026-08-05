@@ -463,6 +463,42 @@ async function fetchWikipediaEntry(term, seriesName, publisher, opts = {}) {
 }
 
 /** Nano で解説を生成する。不可・失敗は null */
+// モデルを温める処理が二重に走らないようにする
+let nanoWarmUpInFlight = null;
+let nanoWarmedAt = 0;
+const NANO_WARM_TTL_MS = 5 * 60 * 1000;
+
+/**
+ * Nano を短いプロンプトで 1 回叩き、モデルをロードさせておく。
+ * コールドスタートは実測 18.3 秒で、2 回目以降は約 0.66 秒（オプションページ実測）。
+ * 解説生成の最初の 1 語がこれをまるごと被るのを避ける。
+ */
+function warmUpNano() {
+  if (nanoWarmUpInFlight) return nanoWarmUpInFlight;
+  if (Date.now() - nanoWarmedAt < NANO_WARM_TTL_MS) return Promise.resolve();
+
+  nanoWarmUpInFlight = (async () => {
+    if (!(await isNanoAvailableBg())) return;
+    let session = null;
+    try {
+      session = await self.LanguageModel.create({
+        temperature: 0,
+        topK: 1,
+        expectedInputs: [{ type: 'text', languages: ['en', 'ja'] }],
+        expectedOutputs: [{ type: 'text', languages: ['ja', 'en'] }],
+      });
+      await session.prompt('ok');
+      nanoWarmedAt = Date.now();
+    } catch {
+      /* 温めの失敗は無視する。対話経路が自前でコールドスタートを被るだけ */
+    } finally {
+      if (session) { try { session.destroy(); } catch { /* destroy 失敗は無視 */ } }
+      nanoWarmUpInFlight = null;
+    }
+  })();
+  return nanoWarmUpInFlight;
+}
+
 async function generateWithNano(prompt, term) {
   if (!(await isNanoAvailableBg())) return null;
 
@@ -1137,18 +1173,20 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       // （再レビュー Important）。生成できる見込みが無いなら Wikipedia を取りに行かない
       if (!(await isNanoAvailableBg())) { sendResponse({ started: false }); return; }
 
-      // 設計書 §4.1「API フォールバック時は先読みしない」: 先読み経路は Nano のみで生成し、
-      // 有料 API へは絶対にフォールバックしない（最終レビュー Critical 1）
-      resolveGlossDefs({
-        seriesId: message.seriesId,
-        seriesName: message.seriesName,
-        terms: message.terms,
-        targetLang: message.targetLang,
-        langLabel: message.langLabel,
-        nanoOnly: true,
-        host: hostOf(sender.tab && sender.tab.url),
-        tabId: (sender.tab && sender.tab.id) ?? null,
-      }).catch(() => { /* 失敗は表示しない（設計書 §10） */ });
+      // 先読みは「モデルを温める」ことだけを行う。
+      //
+      // 以前は用語集の全語ぶんの解説を作らせていたが、実測で有害と判明した
+      // （2026-08-05）。Nano は内部で直列化しており（逐次 6 回 5798ms / 並列 6 回
+      // 5846ms）1 語あたり約 1.9 秒かかる。用語集は巻をまたいで育つため未生成が
+      // 50 語あり、上限の 30 語でも約 57 秒。resolveGlossDefs はシリーズ単位で
+      // ロックをチェーンする（glossInFlight）ので、翻訳後の要求がその後ろで
+      // まるまる待たされていた。実機ログの `missing terms capped: 50 -> 30`。
+      //
+      // 一方、先読みが本当に前倒しできるコストはモデルのコールドスタートである。
+      // 実測: 1 回目の prompt 18,275ms / 2 回目以降 約 660ms。ここを温めておけば
+      // 対話経路の最初の 1 語が 18 秒短くなる。語の解説そのものは、いまページに
+      // 出ている語だけを翻訳直後に作れば足りる（content.js の loadGlossDefs）。
+      warmUpNano();
       sendResponse({ started: true });
       return;
     }
