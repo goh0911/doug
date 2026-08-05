@@ -142,6 +142,83 @@
     }
   };
 
+  /**
+   * 抽出プロンプトの A/B 比較。
+   *
+   * 実機で Nano が「台詞を丸ごと original に写す」モードに落ちることを確認したため、
+   * 何がそれを誘発しているかを切り分ける。
+   *   A = 現行プロンプト（対照）
+   *   B = 訳ゆれ検出（variants/inconsistent）を外したプロンプト
+   *   C = A + responseConstraint（JSON Schema で original を 30 字に制限）
+   *   D = B + responseConstraint
+   */
+  dougDiag.nanoAB = async (id) => {
+    const N = await import(chrome.runtime.getURL('utils/nano-extract.js'));
+    const { s } = await pickSeries(id);
+    const pairs = (s.recentPairs || []).slice(0, 10).map(N.sanitizePairForNano).filter(Boolean);
+    if (pairs.length === 0) return console.warn('recentPairs が空です');
+    const glossary = s.glossary?.[LANG] || {};
+    const base = N.buildExtractionPrompt(pairs, Object.keys(glossary), s.rejectedOriginals || []);
+
+    // 訳ゆれ検出の指示と、出力テンプレートの variants/inconsistent を落とす
+    const noVariants = base
+      .replace(/^「訳ゆれ検出」.*\n/m, '')
+      .replace(/\[\{"original":"\.\.\.","translated":"\.\.\.".*\]/, '[{"original":"...","translated":"..."}]');
+
+    const schema = {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          original: { type: 'string', maxLength: 30 },
+          translated: { type: 'string', maxLength: 30 },
+        },
+        required: ['original', 'translated'],
+        additionalProperties: false,
+      },
+    };
+
+    const runs = [
+      { name: 'A 現行', prompt: base, opts: {} },
+      { name: 'B 訳ゆれなし', prompt: noVariants, opts: {} },
+      { name: 'C 現行+制約', prompt: base, opts: { responseConstraint: schema } },
+      { name: 'D 訳ゆれなし+制約', prompt: noVariants, opts: { responseConstraint: schema } },
+    ];
+
+    const summary = [];
+    for (const run of runs) {
+      const session = await LanguageModel.create({
+        temperature: 0,
+        topK: 1,
+        expectedInputs: [{ type: 'text', languages: ['en', 'ja'] }],
+        expectedOutputs: [{ type: 'text', languages: ['ja', 'en'] }],
+      });
+      try {
+        const t0 = Date.now();
+        const raw = await session.prompt(run.prompt, run.opts);
+        const ms = Date.now() - t0;
+        const parsed = N.parseCandidatesJson(raw);
+        // 「台詞丸写し」の指標: 原語に空白が 4 つ以上ある候補の割合
+        let arr = [];
+        try { arr = JSON.parse(raw.match(/\[[\s\S]*\]/)?.[0] ?? '[]'); } catch { /* 破綻 */ }
+        const verbatim = arr.filter((x) => String(x?.original ?? '').split(/\s+/).length >= 5).length;
+
+        console.group(`${run.name}  ${ms}ms / 生${raw.length}字 / JSON ${arr.length}件 / 丸写し ${verbatim}件 / 採用 ${parsed.length}件`);
+        console.log(raw);
+        parsed.forEach((c) => console.log(`  ${JSON.stringify(c.original)} → ${JSON.stringify(c.translated)}${glossary[c.original] ? ' ← 既存' : ''}`));
+        console.groupEnd();
+        summary.push({ 条件: run.name, ms, JSON件数: arr.length, 丸写し: verbatim, 採用: parsed.length, 新規: parsed.filter((c) => !glossary[c.original]).length });
+      } catch (err) {
+        console.warn(`${run.name} 失敗:`, err?.name, err?.message);
+        summary.push({ 条件: run.name, ms: -1, JSON件数: -1, 丸写し: -1, 採用: -1, 新規: -1 });
+      } finally {
+        session.destroy();
+      }
+    }
+    console.table(summary);
+    return summary;
+  };
+
   /** 失敗キャッシュだけ消す。成功した解説は残す */
   dougDiag.purge = async (id) => {
     const { key, s } = await pickSeries(id);
