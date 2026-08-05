@@ -228,19 +228,19 @@ const EXTRACTION_PAIRS_PER_RUN = 20;
 // 簡略化した検証用プロンプトで測ったことによる誤りだった。
 
 async function runExtractionBg(seriesId) {
-  if (!seriesId || extractionInFlight.has(seriesId)) return;
-  if (!(await isNanoAvailableBg())) return;
+  if (!seriesId || extractionInFlight.has(seriesId)) return 0;
+  if (!(await isNanoAvailableBg())) return 0;
 
   extractionInFlight.add(seriesId);
   try {
     const lockResult = await acquireExtractionLock(seriesId);
-    if (!lockResult || lockResult.status !== 'ok') return; // locked / not-found
+    if (!lockResult || lockResult.status !== 'ok') return 0; // locked / not-found
 
     const series = lockResult.series;
     if (!series || !Array.isArray(series.recentPairs) || series.recentPairs.length === 0) {
       // ペアが無ければロックだけ解放する（success:true, candidates:[]）
       await applyExtractionResult({ seriesId, candidates: [], success: true });
-      return;
+      return 0;
     }
 
     // 渡すペア数は EXTRACTION_PAIRS_PER_RUN で絞る（根拠と実測はその定義を参照）。
@@ -319,9 +319,11 @@ async function runExtractionBg(seriesId) {
 
     // success:false でも呼ぶ（extractionRunning の解放と失敗回数の記録を store 側が行う）
     // consumedPairs は success:true の経路でしか使われない（失敗時にペアを捨てない）
-    await applyExtractionResult({ seriesId, candidates, success, consumedPairs });
+    const applied = await applyExtractionResult({ seriesId, candidates, success, consumedPairs });
+    return (applied && applied.added) || 0;
   } catch {
     /* 抽出の失敗は翻訳結果に影響させない */
+    return 0;
   } finally {
     extractionInFlight.delete(seriesId);
   }
@@ -862,7 +864,17 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         // 抽出が予約されていれば裏で走らせる（応答は待たせない）。
         // これが無いとシリーズ管理画面を開くまで用語集が永久に空のままになる
         if (result && result.extractionDue) {
-          runExtractionBg(payload.seriesId).catch(() => { /* 失敗は表示しない */ });
+          // 新語が採れたらタブに知らせる。抽出は翻訳の完了後に走るため、
+          // これが無いと今読んでいるページの新出語には次の翻訳まで下線が付かない
+          // （content.js 側で解説を取り直し、描画済みオーバーレイを貼り直す）
+          const tabId = sender.tab && sender.tab.id;
+          runExtractionBg(payload.seriesId).then((added) => {
+            if (!added || typeof tabId !== 'number') return;
+            return chrome.tabs.sendMessage(tabId, {
+              type: 'GLOSSARY_UPDATED',
+              payload: { seriesId: payload.seriesId, seriesName: payload.name },
+            });
+          }).catch(() => { /* タブが閉じた・遷移した場合は黙って諦める */ });
         }
       } catch (err) {
         sendResponse(null);

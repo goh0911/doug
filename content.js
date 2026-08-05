@@ -2693,6 +2693,16 @@
       return;
     }
 
+    // 用語抽出で新語が増えた → 解説を取り直して描画済みオーバーレイを貼り直す。
+    // 抽出は翻訳の完了後に走るので、これが無いと今読んでいるページの新出語には
+    // 次の翻訳まで下線が付かない。applyGlossToRenderedOverlays は冪等なので、
+    // 既に下線が付いている語を二重に包むことはない
+    if (message.type === 'GLOSSARY_UPDATED') {
+      const p = message.payload || {};
+      if (p.seriesId) triggerGlossLoad(p.seriesId, p.seriesName || '');
+      return;
+    }
+
     if (message.type === 'PRELOAD_PROGRESS') {
       const bar = document.getElementById('mut-prefetch-bar');
       const fill = document.getElementById('mut-prefetch-fill');
