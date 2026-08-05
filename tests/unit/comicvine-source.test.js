@@ -313,3 +313,41 @@ describe('定数', () => {
     expect(SOURCE_ID).toBe('comicvine');
   });
 });
+
+// ---------------------------------------------------------------------------
+// 敬称・階級の略記（2026-08-05 実測）
+//
+// 用語集の "DOC DOOM" は抽出も両ソースへの問い合わせも通ったうえで失敗していた。
+// 記事・候補は正式表記 "Doctor Doom" で立項されており、敬称を名前側からしか
+// 外していなかったため一致しなかった。
+// ---------------------------------------------------------------------------
+describe('敬称・階級の略記', () => {
+  it('DOC DOOM で Doctor Doom を採る', () => {
+    expect(pickBestResult(FIXTURES.DOOM, 'DOC DOOM', 'marvel')?.name).toBe('Doctor Doom');
+  });
+
+  it('DR. DOOM でも同じ候補を採る', () => {
+    expect(pickBestResult(FIXTURES.DOOM, 'DR. DOOM', 'marvel')?.name).toBe('Doctor Doom');
+  });
+
+  it('略記を開いても別人は採らない（Amanda Von Doom を掴まない）', () => {
+    expect(pickBestResult(FIXTURES.DOOM, 'DOC DOOM', 'marvel')?.name).not.toBe('Amanda Von Doom');
+  });
+
+  it('不変条件: 略記の扱いを変えても BANNER は Brian Banner を採らない', () => {
+    const hit = pickBestResult(FIXTURES.BANNER, 'BANNER', 'marvel');
+    expect(hit?.name).not.toBe('Brian Banner');
+    expect(hit?.name).not.toBe('Bobbi-Jo Banner');
+  });
+
+  it('不変条件: DOC BANNER でも Brian Banner を採らない', () => {
+    expect(passesGate({
+      term: 'DOC BANNER', name: 'Brian Banner',
+      deck: FIXTURES.BANNER[3].deck, publisherName: 'Marvel', publisher: 'marvel',
+    })).toBe(false);
+  });
+
+  it('出版社ゲートは略記の有無に関わらず効く（DC の Doom は採らない）', () => {
+    expect(pickBestResult(FIXTURES.DOOM, 'DOC DOOM', 'marvel')?.publisher?.name).toBe('Marvel');
+  });
+});

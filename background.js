@@ -575,7 +575,8 @@ const GLOSS_SOURCES = [wikipediaSource, comicVineSource];
  * 上げると既存の失敗キャッシュが失効し、次のホバーで引き直される。
  * ソース構成が変わらない改修（passesGate の緩和など）を実機に届かせる唯一の手段。
  */
-const GLOSS_PIPELINE_EPOCH = 1;
+// 2: 敬称・階級の略記を正式表記として扱うようにした（DOC DOOM → Doctor Doom）
+const GLOSS_PIPELINE_EPOCH = 2;
 
 /** いま実際に引けるソースの id（権限があり、必要な設定も済んでいるもの） */
 async function availableSourceIds() {

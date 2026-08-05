@@ -526,3 +526,53 @@ describe('expectedPublisher — Marvel/DC 以外のサイト', () => {
     expect(publisherConflicts(intro, expectedPublisher('archiecomics.com'))).toBe(false);
   });
 });
+
+// ---------------------------------------------------------------------------
+// 敬称・階級の略記（2026-08-05 実測）
+//
+// 台詞では略記で呼ばれるが記事は正式表記で立項されている。用語集の "DOC DOOM" は
+// 抽出も検索も通っていたが、記事 "Doctor Doom" の本文に "Doc Doom" という表記が
+// 無いため termAppearsIn で落ちていた。
+//
+// 導入節は実際の記事から取得したものではなく、照合ロジックを試すための手書きの
+// 最小サンプル（tests/fixtures/wiki-articles.json は実取得データなので混ぜない）
+// ---------------------------------------------------------------------------
+describe('敬称・階級の略記を正式表記として扱う', () => {
+  const doomIntro = 'Doctor Doom (Victor von Doom) is a supervillain appearing in American comic books published by Marvel Comics.';
+
+  it('DOC DOOM は Doctor Doom とタイトル完全一致する', () => {
+    expect(isExactTitleMatch('DOC DOOM', 'Doctor Doom')).toBe(true);
+  });
+
+  it('DOC DOOM が Doctor Doom の記事の第 1 文に現れると判定される', () => {
+    expect(termAppearsIn('DOC DOOM', 'Doctor Doom', doomIntro)).toBe(true);
+  });
+
+  it('略記どうし・正式表記どうしでも一致する', () => {
+    expect(isExactTitleMatch('DOCTOR DOOM', 'Doctor Doom')).toBe(true);
+    expect(isExactTitleMatch('DR. DOOM', 'Doctor Doom')).toBe(true);
+    expect(isExactTitleMatch('DOC DOOM', 'Dr. Doom')).toBe(true);
+  });
+
+  it('他の階級略記も開く', () => {
+    expect(isExactTitleMatch('SGT. FURY', 'Sergeant Fury')).toBe(true);
+    expect(isExactTitleMatch('GEN. FORTEAN', 'General Fortean')).toBe(true);
+    expect(isExactTitleMatch('CAPT. AMERICA', 'Captain America')).toBe(true);
+    expect(isExactTitleMatch('PROF. X', 'Professor X')).toBe(true);
+  });
+
+  it('後ろに語が続かない略記は開かない（敬称ではない同綴りを巻き込まないため）', () => {
+    expect(isExactTitleMatch('DOC', 'Doctor')).toBe(false);
+    expect(isExactTitleMatch('GEN', 'General')).toBe(false);
+  });
+
+  it('語頭以外の略記は開かない', () => {
+    expect(isExactTitleMatch('THE DOC DOOM', 'The Doctor Doom')).toBe(false);
+  });
+
+  it('別人を同一視しない（略記を開いても姓の一致だけでは通さない）', () => {
+    expect(isExactTitleMatch('DOC DOOM', 'Amanda Von Doom')).toBe(false);
+    expect(termAppearsIn('DOC BANNER', 'Brian Banner',
+      'Brian Banner is the abusive father of Bruce Banner in Marvel Comics.')).toBe(false);
+  });
+});

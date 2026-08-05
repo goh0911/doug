@@ -124,7 +124,7 @@ function containsWord(haystack, needle) {
  * 名前の前に付く敬称・階級。これらが付くだけなら同一人物とみなす。
  * 実測: DOOM → "Doctor Doom"、FORTEAN → "General Fortean" はいずれも正解
  */
-const HONORIFICS = /^(?:dr\.?|doctor|professor|prof\.?|mr\.?|mister|mrs\.?|ms\.?|miss|lord|lady|king|queen|prince|princess|sir|dame|saint|st\.?|captain|capt\.?|commander|cmdr\.?|colonel|col\.?|general|gen\.?|major|sergeant|sgt\.?|lieutenant|lt\.?|admiral|agent|officer|detective|judge|chief|baron|count|duke|emperor)\s+/i;
+const HONORIFICS = /^(?:dr\.?|doc\.?|doctor|professor|prof\.?|mr\.?|mister|mrs\.?|ms\.?|miss|lord|lady|king|queen|prince|princess|sir|dame|saint|st\.?|captain|capt\.?|cpt\.?|commander|cmdr\.?|colonel|col\.?|general|gen\.?|major|sergeant|sgt\.?|lieutenant|lt\.?|admiral|adm\.?|agent|officer|detective|judge|chief|baron|count|duke|emperor)\s+/i;
 
 /**
  * 候補の名前が検索語と同じ実体を指すか。
@@ -146,7 +146,10 @@ function isSameEntity(term, name, deck) {
   if (t === '' || n === '') return false;
 
   if (n === t) return true;                       // 完全一致
-  if (n.replace(HONORIFICS, '') === t) return true; // 敬称・階級のみ
+  // 敬称・階級を両側から外して比べる。台詞では略記で呼ばれるのに記事は正式表記で
+  // 立項されているため（実測: 語 "DOC DOOM" / 候補 "Doctor Doom"）、名前側だけ
+  // 外していると届かない。どちらの表記が略記でも一致させる
+  if (n.replace(HONORIFICS, '') === t.replace(HONORIFICS, '')) return true;
 
   // 名前に語を含むのに上の 2 つに当たらない＝個人名や別版が付いている＝別の実体
   if (containsWord(n, t)) return false;

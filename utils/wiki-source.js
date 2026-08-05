@@ -119,6 +119,32 @@ const INTRO_MIN_LENGTH = 60;
  * 照合用の正規化。記号を除去して空白を畳む。
  * S.H.I.E.L.D. → shield / Spider-Man → spiderman のように表記の揺れを吸収する。
  */
+/**
+ * 敬称・階級の略記を正式表記に開くための対応表。
+ *
+ * 台詞では略記で呼ばれるが、記事は正式表記で立項されている（実測: 用語集の
+ * "DOC DOOM" に対し記事は "Doctor Doom"。抽出も検索も通っているのに、
+ * 本文に "Doc Doom" という表記が無いためゲートで落ちていた）。
+ *
+ * 後ろに語が続くときだけ開く。単独の "DOC" を "doctor" にしてしまうと、
+ * 敬称ではない同綴りの語まで巻き込む。
+ */
+const TITLE_ABBREV = {
+  doc: 'doctor',
+  dr: 'doctor',
+  prof: 'professor',
+  mr: 'mister',
+  sgt: 'sergeant',
+  gen: 'general',
+  capt: 'captain',
+  cpt: 'captain',
+  lt: 'lieutenant',
+  col: 'colonel',
+  cmdr: 'commander',
+  adm: 'admiral',
+};
+const TITLE_ABBREV_RE = new RegExp(`^(${Object.keys(TITLE_ABBREV).join('|')}) `);
+
 function normalizeForMatch(s) {
   return String(s ?? '')
     .toLowerCase()
@@ -127,7 +153,10 @@ function normalizeForMatch(s) {
     .replace(/[()[\]{}<>/|]/g, ' ')
     .replace(/[.'‘’\-–—_,:;!?"]/g, '')
     .replace(/\s+/g, ' ')
-    .trim();
+    .trim()
+    // ピリオドを落とした後に開く（"Dr." → "dr" → "doctor"）。
+    // 語と記事の両方に同じ変換を掛けるので、どちらの表記が略記でも一致する
+    .replace(TITLE_ABBREV_RE, (_, abbr) => `${TITLE_ABBREV[abbr]} `);
 }
 
 /**
