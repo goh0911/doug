@@ -560,6 +560,19 @@ const COMICVINE_RATE_LIMIT_COOLDOWN_MS = 60_000;
 let comicVineNextAllowedAt = 0;
 let comicVineCooldownUntil = 0;
 
+/**
+ * Comic Vine のレート制限に当たったので待避する。
+ * ログはクールダウンに入る瞬間だけ出す。語ごとに出すと、制限中は用語集の語数ぶん
+ * 同じ行が並んでコンソールが読めなくなる（実測: 30 語すべてで 420）
+ */
+function enterComicVineCooldown(status, retryMs) {
+  const until = Date.now() + Math.max(COMICVINE_RATE_LIMIT_COOLDOWN_MS, retryMs);
+  if (until > comicVineCooldownUntil) {
+    console.debug(`[gloss] ComicVine レート制限 (${status})。${Math.round((until - Date.now()) / 1000)} 秒待避します`);
+  }
+  comicVineCooldownUntil = Math.max(comicVineCooldownUntil, until);
+}
+
 /** 直前の Comic Vine リクエストから最小間隔が空くまで待つ（呼び出し順に直列化される） */
 async function comicVineThrottle() {
   const now = Date.now();
@@ -592,14 +605,15 @@ async function fetchComicVineEntry(term, _seriesName, publisher) {
   try {
     const res = await fetch(url, { signal: controller.signal });
     if (!res.ok) {
-      console.debug('[gloss] ComicVine HTTP', res.status, term);
-      if (!isTransientHttpStatus(res.status)) return { material: null, transient: false };
+      if (!isTransientHttpStatus(res.status)) {
+        // 恒久的な失敗（キー不正・404 等）は語ごとに出しても数が知れているし、
+        // 原因の特定にどの語で起きたかが要る
+        console.debug('[gloss] ComicVine HTTP', res.status, term);
+        return { material: null, transient: false };
+      }
       // レート超過は Comic Vine だけ待避させる。glossFetchCooldownUntil を触ると
       // Wikipedia まで止まる（そちらは制限に掛かっていない）
-      comicVineCooldownUntil = Date.now() + Math.max(
-        COMICVINE_RATE_LIMIT_COOLDOWN_MS,
-        retryAfterMs(res.headers.get('Retry-After'))
-      );
+      enterComicVineCooldown(res.status, retryAfterMs(res.headers.get('Retry-After')));
       return { material: null, transient: true };
     }
     json = await res.json();
@@ -613,8 +627,7 @@ async function fetchComicVineEntry(term, _seriesName, publisher) {
   // Comic Vine は HTTP 200 のまま status_code でエラーを返す（107 = レート制限）
   const parsed = CV.parseSearchResponse(json);
   if (parsed.status === 'transient') {
-    console.debug('[gloss] ComicVine rate limited', term);
-    glossFetchCooldownUntil = Date.now() + retryAfterMs(null);
+    enterComicVineCooldown(107, retryAfterMs(null));
     return { material: null, transient: true };
   }
   if (parsed.status !== 'ok') return { material: null, transient: false };
