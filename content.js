@@ -516,6 +516,15 @@
     }).catch(() => { /* 失敗は表示しない */ });
   }
 
+  // 描画済みオーバーレイの訳文を全部つないだもの。
+  // どの用語が「いまページに出ているか」を判定するために使う
+  function renderedOverlayText() {
+    const nodes = document.querySelectorAll('#mut-overlay-container .mut-overlay-text');
+    let out = '';
+    nodes.forEach((el) => { out += el.textContent || ''; out += '\n'; });
+    return out;
+  }
+
   // 翻訳完了後に解説を取り込み、描画済みオーバーレイを後追いで span 化する
   async function loadGlossDefs(series, targetLang) {
     if (!series || !series.seriesId) return;
@@ -547,13 +556,29 @@
     // 送ってくるので、バッチが返る前に到着する
     currentGlossLangMap = langMap;
 
+    // いまページに出ている語だけ要求する。
+    //
+    // 用語集は巻をまたいで育つため（実機で 75 語）、全語を投げると出てこない語の
+    // 解説まで生成することになる。Nano は内部で直列化しており（実測: 逐次 6 回
+    // 5798ms / 並列 6 回 5846ms＝同じ）1 語あたり約 1.9 秒かかるので、これが
+    // そのまま下線が出るまでの待ち時間になっていた。
+    //
+    // 照合は buildGlossTermList と同じ entry.translated で行う。ここで落とした語は
+    // そもそも splitByTerms が拾わない＝下線にならないので、取りこぼしにはならない。
+    // 出てこなかった語は次にそのページを開いたときに生成される。
+    const pageText = renderedOverlayText();
+    const visible = pageText === ''
+      ? terms // オーバーレイ未描画（想定外）なら従来どおり全語
+      : terms.filter((k) => pageText.includes(langMap[k].translated));
+    if (visible.length === 0) return;
+
     let response = null;
     try {
       response = await chrome.runtime.sendMessage({
         type: 'GET_GLOSS_DEFS',
         seriesId: series.seriesId,
         seriesName: series.name,
-        terms,
+        terms: visible,
         targetLang,
         langLabel: LANG_LABELS[targetLang] || '日本語',
       });
@@ -562,7 +587,9 @@
     }
 
     if (!response || !response.defs) return;
-    currentGlossDefs = response.defs;
+    // 置き換えではなくマージする。GLOSS_DEFS_PARTIAL で先に届いたぶんや、
+    // 並行して走っている先読みの結果を取りこぼさないため
+    currentGlossDefs = { ...currentGlossDefs, ...response.defs };
     currentGlossTerms = buildGlossTermList(currentGlossDefs, langMap);
     applyGlossToRenderedOverlays();
   }
