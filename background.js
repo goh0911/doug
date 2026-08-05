@@ -939,21 +939,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         // pairs（Phase 4）が含まれる場合はそのまま転送（pairs が無ければ [] として渡す）
         const result = await recordSeriesTranslation({ ...payload, pathPrefix, pairs: payload.pairs ?? [] });
         sendResponse(result);
-        // 抽出が予約されていれば裏で走らせる（応答は待たせない）。
-        // これが無いとシリーズ管理画面を開くまで用語集が永久に空のままになる
-        if (result && result.extractionDue) {
-          // 新語が採れたらタブに知らせる。抽出は翻訳の完了後に走るため、
-          // これが無いと今読んでいるページの新出語には次の翻訳まで下線が付かない
-          // （content.js 側で解説を取り直し、描画済みオーバーレイを貼り直す）
-          const tabId = sender.tab && sender.tab.id;
-          runExtractionBg(payload.seriesId).then((added) => {
-            if (!added || typeof tabId !== 'number') return;
-            return chrome.tabs.sendMessage(tabId, {
-              type: 'GLOSSARY_UPDATED',
-              payload: { seriesId: payload.seriesId, seriesName: payload.name },
-            });
-          }).catch(() => { /* タブが閉じた・遷移した場合は黙って諦める */ });
-        }
+        // 抽出はここでは起動しない。応答の extractionDue を見た content.js が、
+        // 解説の取得を終えてから RUN_EXTRACTION を送ってくる。
+        //
+        // Nano は内部で直列化しているため（実測: 逐次 6 回 5798ms / 並列 6 回 5846ms）、
+        // 用語抽出と解説生成は同じ資源を奪い合う。ここで起動すると抽出が先にロックを
+        // 取り、抽出が 16〜19 秒（コールドスタート）かかった場合その間ずっと下線が
+        // 出ない。下線に直結する解説を先に通し、抽出は後回しにする。
+        // 抽出が次のページまで遅れても実害は無い（recentPairs は最大 50 件保持される）。
       } catch (err) {
         sendResponse(null);
       }
@@ -1050,8 +1043,18 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     // 修正が片方にしか効かなくなるため、実処理は runExtractionBg に一本化する
     if (message.type === 'RUN_EXTRACTION') {
       try {
-        await runExtractionBg(message.payload && message.payload.seriesId);
-        sendResponse({ status: 'ok' });
+        const seriesId = message.payload && message.payload.seriesId;
+        const added = await runExtractionBg(seriesId);
+        // 新語が採れたらタブに知らせる。content.js が解説を取り直して下線を貼り直す。
+        // series.js（シリーズ管理画面）から呼ばれた場合は sender.tab が無いので送らない
+        const tabId = sender.tab && sender.tab.id;
+        if (added && typeof tabId === 'number') {
+          chrome.tabs.sendMessage(tabId, {
+            type: 'GLOSSARY_UPDATED',
+            payload: { seriesId, seriesName: (message.payload && message.payload.seriesName) || '' },
+          }).catch(() => { /* タブが閉じた・遷移した場合は黙って諦める */ });
+        }
+        sendResponse({ status: 'ok', added });
       } catch (err) {
         sendResponse({ status: 'error', message: err && err.message });
       }

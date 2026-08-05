@@ -857,10 +857,22 @@
             // Phase 4: 翻訳ペア（生データ）を付与してペアバッファリングに使用
             pairs: (response && Array.isArray(response.pairs)) ? response.pairs : [],
           },
+        }).then((rec) => {
+          // 解説 → 用語抽出 の順に流す。Nano は内部で直列化しているため両者は同じ
+          // 資源を奪い合い、抽出が先に走ると（コールドスタート時 16〜19 秒）その間
+          // ずっと下線が出ない。下線に直結する解説を先に通す。
+          // 抽出が次のページまで遅れても実害は無い（recentPairs は最大 50 件保持）
+          const due = !!(rec && rec.extractionDue);
+          return triggerGlossLoad(seriesInfo.seriesId, seriesInfo.series)
+            .catch(() => { /* 解説の失敗で抽出まで止めない */ })
+            .then(() => {
+              if (!due) return;
+              return chrome.runtime.sendMessage({
+                type: 'RUN_EXTRACTION',
+                payload: { seriesId: seriesInfo.seriesId, seriesName: seriesInfo.series },
+              });
+            });
         }).catch(() => { /* 記録失敗は翻訳結果に影響させない */ });
-
-        // 翻訳完了後に解説を取り込み、描画済みオーバーレイを後追いで span 化する
-        triggerGlossLoad(seriesInfo.seriesId, seriesInfo.series);
       }
 
       const message = response.fromCache
