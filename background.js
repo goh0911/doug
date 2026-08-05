@@ -711,7 +711,7 @@ async function mapWithConcurrency(items, limit, worker) {
  * @param {boolean} nanoOnly true のとき先読み専用モード（Nano のみ・有料 API 不可）で生成する
  * @returns {Promise<object>} { 原語: { identity, powers, url } }。失敗語は含めない
  */
-async function resolveGlossDefs({ seriesId, seriesName, terms, targetLang, langLabel, nanoOnly = false, host = '' }) {
+async function resolveGlossDefs({ seriesId, seriesName, terms, targetLang, langLabel, nanoOnly = false, host = '', tabId = null }) {
   const lockKey = `${seriesId}:${targetLang}`;
   // 直前の実行が入れ替わる直前まで Map から見えるようにチェーンする。
   // await の後に別呼び出しが割り込んでも、同じ prev を待った全員が
@@ -766,6 +766,18 @@ async function resolveGlossDefs({ seriesId, seriesName, terms, targetLang, langL
             if (!stored) {
               // 直前の存在確認から書き込みまでの間に series が削除された等のレース。戻り値を捨てず記録する
               console.debug('[gloss] putGlossDefs failed after existence check (race?):', seriesId, targetLang);
+            }
+            // できた語から順にタブへ流す。1 語あたり約 1.9 秒（Wikipedia 取得 + Nano 要約）
+            // かかるため、バッチ全体を待つと 13 語で 8〜9 秒どの下線も出ない。
+            // content.js 側で currentGlossDefs にマージして貼り直す
+            if (typeof tabId === 'number' && entry.failed !== true) {
+              chrome.tabs.sendMessage(tabId, {
+                type: 'GLOSS_DEFS_PARTIAL',
+                payload: {
+                  term,
+                  def: { identity: entry.identity, powers: entry.powers, url: entry.url, source: entry.source },
+                },
+              }).catch(() => { /* タブが閉じた・遷移した場合は黙って諦める */ });
             }
           });
         }
@@ -1105,6 +1117,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         langLabel: message.langLabel,
         nanoOnly: true,
         host: hostOf(sender.tab && sender.tab.url),
+        tabId: (sender.tab && sender.tab.id) ?? null,
       }).catch(() => { /* 失敗は表示しない（設計書 §10） */ });
       sendResponse({ started: true });
       return;
@@ -1125,6 +1138,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           langLabel: message.langLabel,
           nanoOnly: false,
           host: hostOf(sender.tab && sender.tab.url),
+          tabId: (sender.tab && sender.tab.id) ?? null,
         });
         sendResponse({ defs });
       } catch {

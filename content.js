@@ -503,6 +503,9 @@
       return e && typeof e.translated === 'string' && e.translated !== '';
     });
     if (terms.length === 0) return;
+    // 応答を待つ前に控える。background は生成できた語から GLOSS_DEFS_PARTIAL を
+    // 送ってくるので、バッチが返る前に到着する
+    currentGlossLangMap = langMap;
     chrome.runtime.sendMessage({
       type: 'PREFETCH_GLOSS_DEFS',
       seriesId: series.seriesId,
@@ -540,6 +543,9 @@
       return e && typeof e.translated === 'string' && e.translated !== '';
     });
     if (terms.length === 0) return;
+    // 応答を待つ前に控える。background は生成できた語から GLOSS_DEFS_PARTIAL を
+    // 送ってくるので、バッチが返る前に到着する
+    currentGlossLangMap = langMap;
 
     let response = null;
     try {
@@ -1699,6 +1705,9 @@
   // 訳文の分割に使う { match: 訳語, key: 原語 } のリスト
   let currentGlossDefs = {};
   let currentGlossTerms = [];
+  // GLOSS_DEFS_PARTIAL で 1 語ずつ届いたときに用語リストを組み直すため、
+  // 直近に使った glossary の言語マップを保持する
+  let currentGlossLangMap = null;
 
   // glossDefs と glossaryLangMap から分割用リストを作る。
   // 解説の生成に成功した語だけを対象にする（設計書 §7.3）
@@ -2700,6 +2709,18 @@
     if (message.type === 'GLOSSARY_UPDATED') {
       const p = message.payload || {};
       if (p.seriesId) triggerGlossLoad(p.seriesId, p.seriesName || '');
+      return;
+    }
+
+    // 解説が 1 語できるたびに届く。1 語あたり約 1.9 秒（Wikipedia 取得 + Nano 要約）
+    // かかるため、バッチ全体を待つと 13 語で 8〜9 秒どの下線も出ない。
+    // 届いたぶんだけ即座に反映する（applyGlossToRenderedOverlays は冪等）
+    if (message.type === 'GLOSS_DEFS_PARTIAL') {
+      const p = message.payload || {};
+      if (!p.term || !p.def || !currentGlossLangMap) return;
+      currentGlossDefs = { ...currentGlossDefs, [p.term]: p.def };
+      currentGlossTerms = buildGlossTermList(currentGlossDefs, currentGlossLangMap);
+      applyGlossToRenderedOverlays();
       return;
     }
 
