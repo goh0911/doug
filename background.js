@@ -517,12 +517,32 @@ const wikipediaSource = {
  * Wikipedia と違いシリーズ名は使わない。Comic Vine の検索はシリーズ名を足すと
  * ノイズになるうえ、出版社が構造化フィールドで返るため曖昧さ回避が別途効く。
  */
+// Comic Vine のレート制御。公式は「1 秒に 1 リクエスト」かつ「リソースあたり
+// 1 時間 200 件」。前者を守るための最小間隔、後者に当たったときの待避が下の 2 つ。
+const COMICVINE_MIN_INTERVAL_MS = 1100;
+const COMICVINE_RATE_LIMIT_COOLDOWN_MS = 60_000;
+let comicVineNextAllowedAt = 0;
+let comicVineCooldownUntil = 0;
+
+/** 直前の Comic Vine リクエストから最小間隔が空くまで待つ（呼び出し順に直列化される） */
+async function comicVineThrottle() {
+  const now = Date.now();
+  const startAt = Math.max(now, comicVineNextAllowedAt);
+  comicVineNextAllowedAt = startAt + COMICVINE_MIN_INTERVAL_MS;
+  const wait = startAt - now;
+  if (wait > 0) await new Promise((resolve) => setTimeout(resolve, wait));
+}
+
 async function fetchComicVineEntry(term, _seriesName, publisher) {
   const { comicvineApiKey = '' } = await chrome.storage.local.get('comicvineApiKey').catch(() => ({}));
   const url = CV.buildSearchUrl(term, comicvineApiKey);
   if (!url) return { material: null, transient: false }; // キー未設定＝この経路は使わない
 
   if (Date.now() < glossFetchCooldownUntil) return { material: null, transient: true };
+  if (Date.now() < comicVineCooldownUntil) return { material: null, transient: true };
+  // Comic Vine は「1 秒に 1 リクエスト」を求めている。同時実行 3 で無間隔に叩くと
+  // HTTP 420（Enhance Your Calm）で全滅する（実測 2026-08-05・30 語すべて 420）
+  await comicVineThrottle();
 
   await glossFetchSemaphore.acquire();
   if (Date.now() < glossFetchCooldownUntil) {
@@ -538,7 +558,12 @@ async function fetchComicVineEntry(term, _seriesName, publisher) {
     if (!res.ok) {
       console.debug('[gloss] ComicVine HTTP', res.status, term);
       if (!isTransientHttpStatus(res.status)) return { material: null, transient: false };
-      glossFetchCooldownUntil = Date.now() + retryAfterMs(res.headers.get('Retry-After'));
+      // レート超過は Comic Vine だけ待避させる。glossFetchCooldownUntil を触ると
+      // Wikipedia まで止まる（そちらは制限に掛かっていない）
+      comicVineCooldownUntil = Date.now() + Math.max(
+        COMICVINE_RATE_LIMIT_COOLDOWN_MS,
+        retryAfterMs(res.headers.get('Retry-After'))
+      );
       return { material: null, transient: true };
     }
     json = await res.json();
@@ -587,12 +612,17 @@ const GLOSS_SOURCES = [wikipediaSource, comicVineSource];
  * ソース構成が変わらない改修（passesGate の緩和など）を実機に届かせる唯一の手段。
  */
 // 2: 敬称・階級の略記を正式表記として扱うようにした（DOC DOOM → Doctor Doom）
-const GLOSS_PIPELINE_EPOCH = 2;
+// 3: Comic Vine の HTTP 420 を一時的失敗として扱う（それ以前は失敗として焼き付いていた）
+const GLOSS_PIPELINE_EPOCH = 3;
 
-/** いま実際に引けるソースの id（権限があり、必要な設定も済んでいるもの） */
-async function availableSourceIds() {
+/**
+ * いま実際に引けるソースの id（権限があり、必要な設定も済んでいるもの）
+ * @param {{ primaryOnly?: boolean }} [opts] true なら先頭のソース（Wikipedia）だけを使う
+ */
+async function availableSourceIds({ primaryOnly = false } = {}) {
   const ids = [];
   for (const source of GLOSS_SOURCES) {
+    if (primaryOnly && source.id !== SOURCE_ID) continue;
     const granted = await chrome.permissions.contains({ origins: [source.origin] }).catch(() => false);
     if (!granted) continue;
     if (typeof source.isConfigured === 'function' && !(await source.isConfigured().catch(() => false))) continue;
@@ -605,8 +635,8 @@ async function availableSourceIds() {
  * 失敗キャッシュの指紋。「どの世代の・どのソース構成で失敗したか」を表す。
  * これが現在の値と違う失敗エントリは信用しない（utils/gloss-cache.js の isUsable）
  */
-async function glossSourcesKey() {
-  return `${GLOSS_PIPELINE_EPOCH}:${(await availableSourceIds()).join('+')}`;
+async function glossSourcesKey(opts) {
+  return `${GLOSS_PIPELINE_EPOCH}:${(await availableSourceIds(opts)).join('+')}`;
 }
 
 /** URL からホスト名を取り出す（取れなければ空文字） */
@@ -630,7 +660,7 @@ function seriesHost(series) {
 async function fetchFromSources(term, seriesName, publisher, opts = {}) {
   // 指紋の算出と同じ「使えるソース」判定を使う。ここがずれると、
   // 引いてもいないソースの id が指紋に混ざる（＝失効の判断が狂う）
-  const available = new Set(await availableSourceIds());
+  const available = new Set(await availableSourceIds({ primaryOnly: !!opts.primaryOnly }));
   let transient = false;
   for (const source of GLOSS_SOURCES) {
     if (!available.has(source.id)) continue;
@@ -657,7 +687,7 @@ async function buildGlossEntry(term, seriesName, langLabel, nanoOnly = false, pu
   const failedEntry = { failed: true, at: now, sources: sourcesKey };
   // 先読み（非対話）だけ maxlag を付ける。hover 経路で付けると DB 遅延時に無応答になる
   const { material, transient } = await fetchFromSources(term, seriesName, publisher,
-    nanoOnly ? { maxlag: GLOSS_PREFETCH_MAXLAG } : {});
+    nanoOnly ? { maxlag: GLOSS_PREFETCH_MAXLAG, primaryOnly: true } : {});
   if (!material) {
     // 一時的失敗（レート制限・通信断・maxlag）は「今回は試さなかった」扱いにして
     // 24 時間の失敗キャッシュに焼き付けない。null は呼び出し側が保存せず次回再試行する
@@ -723,7 +753,7 @@ async function resolveGlossDefs({ seriesId, seriesName, terms, targetLang, langL
     try {
       const now = Date.now();
       const cached = await getGlossDefs(seriesId, targetLang);
-      const sourcesKey = await glossSourcesKey();
+      const sourcesKey = await glossSourcesKey({ primaryOnly: nanoOnly });
       const wanted = Array.isArray(terms) ? [...new Set(terms.filter((t) => typeof t === 'string' && t))] : [];
       let missing = wanted.filter((t) => !isUsable(cached[t], now, sourcesKey));
 

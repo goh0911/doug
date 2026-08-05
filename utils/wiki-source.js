@@ -331,7 +331,9 @@ export function passesGate(parts) {
 export function isTransientHttpStatus(status) {
   const s = Number(status);
   if (!Number.isFinite(s)) return false;
-  return s === 408 || s === 429 || (s >= 500 && s <= 599);
+  // 420 は非標準の "Enhance Your Calm"。Comic Vine がレート超過で返す（実測 2026-08-05）。
+  // 一時的失敗に入れないと、混雑しただけの語が 24 時間の失敗キャッシュに焼き付く
+  return s === 408 || s === 420 || s === 429 || (s >= 500 && s <= 599);
 }
 
 /**

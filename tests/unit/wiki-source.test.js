@@ -576,3 +576,23 @@ describe('敬称・階級の略記を正式表記として扱う', () => {
       'Brian Banner is the abusive father of Bruce Banner in Marvel Comics.')).toBe(false);
   });
 });
+
+describe('isTransientHttpStatus - 420（Comic Vine のレート制限）', () => {
+  it('420 は一時的失敗（24h の失敗キャッシュに焼き付けない）', () => {
+    // 実測 2026-08-05: 同時実行 3 で無間隔に叩き、30 語すべて 420 が返った。
+    // 恒久的失敗として扱うと、混雑しただけの語が丸一日引き直されなくなる
+    expect(isTransientHttpStatus(420)).toBe(true);
+  });
+
+  it('従来の一時的失敗も維持する', () => {
+    expect(isTransientHttpStatus(408)).toBe(true);
+    expect(isTransientHttpStatus(429)).toBe(true);
+    expect(isTransientHttpStatus(503)).toBe(true);
+  });
+
+  it('恒久的失敗は一時的失敗にしない', () => {
+    expect(isTransientHttpStatus(404)).toBe(false);
+    expect(isTransientHttpStatus(403)).toBe(false);
+    expect(isTransientHttpStatus(400)).toBe(false);
+  });
+});
