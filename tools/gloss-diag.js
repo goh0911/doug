@@ -29,6 +29,17 @@
       .filter(({ s }) => s && (s.glossary?.[LANG] || s.glossDefs?.[LANG]));
   }
 
+  /**
+   * 用語集のキーを addedAt 降順で返す。background.js の runExtractionBg と同じ並び。
+   * Object.keys() をそのまま使うと辞書順になり（chrome.storage がキーをソートして
+   * 保持するため）、実パイプラインと違う除外リストで測ることになる
+   */
+  function recentOriginals(glossaryLangMap) {
+    return Object.entries(glossaryLangMap)
+      .sort(([, a], [, b]) => (b?.addedAt ?? 0) - (a?.addedAt ?? 0))
+      .map(([k]) => k);
+  }
+
   /** 対象シリーズを 1 つ選ぶ。id 未指定なら用語集が最も多いもの */
   async function pickSeries(id) {
     const list = await loadSeries();
@@ -112,7 +123,7 @@
     const pairs = (s.recentPairs || []).slice(0, 10).map(N.sanitizePairForNano).filter(Boolean);
     if (pairs.length === 0) return console.warn('recentPairs が空です');
     const glossary = s.glossary?.[LANG] || {};
-    const prompt = N.buildExtractionPrompt(pairs, Object.keys(glossary), s.rejectedOriginals || []);
+    const prompt = N.buildExtractionPrompt(pairs, recentOriginals(glossary), s.rejectedOriginals || []);
 
     console.log(`プロンプト ${prompt.length} 字 / ペア ${pairs.length} 件`);
     console.log('除外リスト:', prompt.match(/「既存用語集」 \(除外対象\) (.*)/)?.[1]);
