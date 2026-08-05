@@ -251,9 +251,15 @@ async function runExtractionBg(seriesId) {
     // series.js の runExtraction と同じく 'ja' 固定（両者の挙動を揃えるため）
     const targetLang = 'ja';
     const glossaryLangMap = (series.glossary && series.glossary[targetLang]) || {};
+    // addedAt の新しい順で渡す。Object.keys() をそのまま渡すと辞書順になり
+    // （chrome.storage がキーをソートして保持するため）、除外リストの 10 枠が
+    // 毎回アルファベット末尾の語で埋まる。詳細は buildExtractionPrompt のコメント
+    const recentOriginals = Object.entries(glossaryLangMap)
+      .sort(([, a], [, b]) => (b?.addedAt ?? 0) - (a?.addedAt ?? 0))
+      .map(([k]) => k);
     const prompt = buildExtractionPrompt(
       sanitizedPairs,
-      Object.keys(glossaryLangMap),
+      recentOriginals,
       series.rejectedOriginals || []
     );
 

@@ -510,14 +510,14 @@ describe('buildExtractionPrompt - 除外リストの上限', () => {
     expect(EXTRACTION_EXISTING_LIMIT).toBe(10);
   });
 
-  it('上限を超える除外語は新しい側だけを残す', () => {
+  it('上限を超える除外語は先頭側だけを残す（呼び出し側が優先順で渡す）', () => {
     const p = buildExtractionPrompt(pairs, many);
-    // 末尾 10 語（TERM15〜TERM24）は残る
-    expect(p).toContain('TERM24');
-    expect(p).toContain('TERM15');
-    // それより古い側は落とす
-    expect(p).not.toContain('TERM14');
-    expect(p).not.toContain('TERM00');
+    // 先頭 10 語（TERM00〜TERM09）は残る
+    expect(p).toContain('TERM00');
+    expect(p).toContain('TERM09');
+    // それより後ろは落とす
+    expect(p).not.toContain('TERM10');
+    expect(p).not.toContain('TERM24');
   });
 
   it('上限以下ならすべて列挙する', () => {
@@ -529,9 +529,16 @@ describe('buildExtractionPrompt - 除外リストの上限', () => {
 
   it('existing と rejected を合算したうえで上限を適用する', () => {
     const p = buildExtractionPrompt(pairs, many.slice(0, 20), many.slice(20));
-    // rejected（最も新しい側）は必ず残る
+    // existing が先に並ぶため、その先頭 10 語で枠が埋まる
+    expect(p).toContain('TERM00');
+    expect(p).not.toContain('TERM19');
+    expect(p).not.toContain('TERM24'); // rejected まで届かない
+  });
+
+  it('existing が空なら rejected が枠を使う', () => {
+    const p = buildExtractionPrompt(pairs, [], many.slice(20));
+    expect(p).toContain('TERM20');
     expect(p).toContain('TERM24');
-    expect(p).not.toContain('TERM00');
   });
 
   it('除外リストが長くてもプロンプトが肥大しない', () => {
@@ -589,12 +596,106 @@ describe('mergeCandidates - variants (Phase 6-B)', () => {
   });
 });
 
-describe('buildExtractionPrompt - variants (Phase 6-B)', () => {
-  it('訳ゆれ検出の指示と variants を含む出力例がプロンプトに入る', () => {
+// 訳ゆれの判定を Nano からコード側へ移した本体。
+// 「同じ原語に違う訳が付いた」という文字列比較で足り、LLM は要らない
+describe('mergeCandidates - 訳ゆれをマージ時に検出する', () => {
+  const existing = (translated, extra = {}) => ({
+    translated, approved: false, count: 0, addedAt: 1, source: 'nano-extract', ...extra,
+  });
+
+  it('既存語が別の訳で再抽出されたら訳ゆれとして記録する', () => {
+    const { glossaryLangMap, added } = mergeCandidates(
+      { WALT: existing('ウォルト') },
+      [{ original: 'WALT', translated: 'ウォルター' }]
+    );
+    expect(glossaryLangMap.WALT.inconsistent).toBe(true);
+    expect(glossaryLangMap.WALT.variants).toEqual(['ウォルト', 'ウォルター']);
+    expect(added).toBe(0); // 新規登録ではない
+  });
+
+  it('訳が同じなら訳ゆれにしない', () => {
+    const { glossaryLangMap } = mergeCandidates(
+      { WALT: existing('ウォルト') },
+      [{ original: 'WALT', translated: 'ウォルト' }]
+    );
+    expect(glossaryLangMap.WALT.inconsistent).toBeUndefined();
+    expect(glossaryLangMap.WALT.variants).toBeUndefined();
+  });
+
+  it('採用済みの訳は書き換えない（承認済みの訳を後から塗り替えない）', () => {
+    const { glossaryLangMap } = mergeCandidates(
+      { WALT: existing('ウォルト', { approved: true }) },
+      [{ original: 'WALT', translated: 'ウォルター' }]
+    );
+    expect(glossaryLangMap.WALT.translated).toBe('ウォルト');
+    expect(glossaryLangMap.WALT.approved).toBe(true);
+    expect(glossaryLangMap.WALT.inconsistent).toBe(true);
+  });
+
+  it('3 つ目の訳が来たら variants に積み増す', () => {
+    const step1 = mergeCandidates(
+      { WALT: existing('ウォルト') },
+      [{ original: 'WALT', translated: 'ウォルター' }]
+    ).glossaryLangMap;
+    const step2 = mergeCandidates(step1, [{ original: 'WALT', translated: 'ワルト' }]).glossaryLangMap;
+    expect(step2.WALT.variants).toEqual(['ウォルト', 'ウォルター', 'ワルト']);
+  });
+
+  it('同じ訳ゆれを繰り返しても variants は重複しない', () => {
+    const step1 = mergeCandidates(
+      { WALT: existing('ウォルト') },
+      [{ original: 'WALT', translated: 'ウォルター' }]
+    ).glossaryLangMap;
+    const step2 = mergeCandidates(step1, [{ original: 'WALT', translated: 'ウォルター' }]).glossaryLangMap;
+    expect(step2.WALT.variants).toEqual(['ウォルト', 'ウォルター']);
+  });
+
+  it('却下済みの語は訳ゆれ判定より前に落とす', () => {
+    const { glossaryLangMap } = mergeCandidates(
+      { WALT: existing('ウォルト') },
+      [{ original: 'WALT', translated: 'ウォルター' }],
+      ['WALT']
+    );
+    expect(glossaryLangMap.WALT.inconsistent).toBeUndefined();
+  });
+});
+
+// 30 字の上限だけでは台詞の断片が通り抜けていた（2026-08-05 実測）
+describe('sanitizeCandidate - 語数による台詞の除外', () => {
+  it('5 語以上の原語を弾く（実際に用語集へ登録されていた台詞）', () => {
+    expect(sanitizeCandidate({ original: 'THE MAN IS BARELY COLD--', translated: 'まだ遺体も冷めきってない' })).toBeNull();
+  });
+
+  it('丸写しが 30 字で切り詰められたものも弾く', () => {
+    expect(sanitizeCandidate({ original: 'ANY OBJECTIONS TO ME TAKING LE', translated: 'ここから私が仕切る' })).toBeNull();
+  });
+
+  it('4 語の固有名詞は通す（実在する最長級。ここが境界）', () => {
+    expect(sanitizeCandidate({ original: 'UNITED STATES AIR FORCE', translated: 'アメリカ空軍' })).not.toBeNull();
+    expect(sanitizeCandidate({ original: 'ALPHA FLIGHT SPACE STATION', translated: 'アルファ・フライト宇宙ステーション' })).not.toBeNull();
+  });
+
+  it('2 語の固有名詞は通す', () => {
+    expect(sanitizeCandidate({ original: 'GAMMA FLIGHT', translated: 'ガンマ・フライト' })).not.toBeNull();
+  });
+});
+
+// 訳ゆれ検出は Nano への指示から外し、mergeCandidates の純粋な比較に移した。
+// 出力スキーマに variants/inconsistent を載せると抽出タスク自体が破綻し、
+// 台詞を丸写しするようになる（2026-08-05 実測・同一入力 temperature 0 で再現）:
+//   訳ゆれ節あり 32.9秒 / JSON 10 件すべて台詞そのまま / 採用は誤検出 1 件
+//   訳ゆれ節なし  1.2秒 / JSON  1 件・丸写し 0 件
+describe('buildExtractionPrompt - 訳ゆれ検出を含まない', () => {
+  it('訳ゆれの指示と variants/inconsistent がプロンプトに入らない', () => {
     const p = buildExtractionPrompt([{ original: 'A', translated: 'あ' }], [], []);
-    expect(p).toContain('訳ゆれ検出');
-    expect(p).toContain('variants');
-    expect(p).toContain('inconsistent');
+    expect(p).not.toContain('訳ゆれ');
+    expect(p).not.toContain('variants');
+    expect(p).not.toContain('inconsistent');
+  });
+
+  it('出力例は original / translated だけの単純な形', () => {
+    const p = buildExtractionPrompt([{ original: 'A', translated: 'あ' }], [], []);
+    expect(p).toContain('[{"original":"...","translated":"..."}]');
   });
 });
 
