@@ -341,3 +341,36 @@ Comic Vine の `isSameEntity` も `DOC` と `Doctor` を別物として扱う。
 `DOC` → `DOCTOR` のような敬称略称の正規化で対処できるクラス。着手する場合は
 `tests/fixtures/wiki-articles.json` で **Brian Banner / Reggie Mantle が却下され続ける**
 不変条件を守ること。
+
+---
+
+## 追記（2026-08-05）: 愛称・略記の正規化と、その結果
+
+`DOC DOOM` は抽出も検索も両ソースへの問い合わせも通ったうえで失敗していた。
+記事は `Doctor Doom` で立項されており、本文に `Doc Doom` という表記が無いため
+`termAppearsIn` が通らず、Comic Vine の `isSameEntity` も `DOC` と `Doctor` を
+別物として扱っていた。
+
+### 修正（32a8ee2 / d424ab5）
+
+- Wikipedia 側: `normalizeForMatch` に敬称・階級の略記展開を追加
+  （`doc`→`doctor` / `sgt`→`sergeant` 等）。語と記事の両方に同じ変換が掛かるため
+  どちらが略記でも一致する。**後ろに語が続くときだけ開く**——単独の `DOC` を
+  `doctor` にすると敬称でない同綴りを巻き込む
+- Comic Vine 側: `HONORIFICS` に `doc` / `cpt` / `adm` を追加し、敬称を語側からも外す。
+  ただし**候補名にも敬称が付いているときに限る**。語側だけ外すと `DOC DOOM` が
+  `doom` になり DC Comics の別キャラ `Doom` に当たる（出版社が分かる経路では
+  出版社ゲートが止めるが、未知サイトは `publisher: null` で素通りする）
+- `GLOSS_PIPELINE_EPOCH` を 2 に上げ、既存の失敗キャッシュを失効させた
+
+### 実機の結果
+
+`DOC DOOM` → `Doctor Doom`（en-wikipedia）で解説が生成された。
+
+### 新たに見つかった別課題: 解説本文の固有名詞の誤訳
+
+生成された `powers` に「宿敵**リー・チャイルド**の知能に匹敵する」とある。
+Doctor Doom の宿敵は Reed Richards であり、Nano が英文中の Reed Richards を
+作家 Lee Child と訳している。ゲートや取得ではなく解説生成
+（`buildGlossPrompt` → `generateWithNano`）側の翻訳品質の問題。
+解説本文に登場する固有名詞は同種の誤訳を起こしうる。**未着手。**
