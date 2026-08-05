@@ -230,6 +230,35 @@
     return summary;
   };
 
+  /**
+   * 解説の生成を強制的に走らせる（ページを再翻訳せずに済ませるため）。
+   *   await dougDiag.refetch()                     用語集の全語
+   *   await dougDiag.refetch('DOC DOOM', 'DOOM')   指定した語だけ
+   *
+   * 注意: オプションページから送ると sender.tab が無いため background 側の host が
+   * 空になり、expectedPublisher が null になる。つまり**出版社ゲートが効かない**
+   * 条件での結果になる。実際の閲覧経路より緩いので、ここで通っても実機で通るとは
+   * 限らない（逆は言える）。最終確認は必ずページの再翻訳で行うこと。
+   */
+  dougDiag.refetch = async (...terms) => {
+    const { key, s } = await pickSeries();
+    const seriesId = key.slice(SERIES_PREFIX.length);
+    const wanted = terms.length > 0 ? terms : Object.keys(s.glossary?.[LANG] || {});
+    console.log(`${wanted.length} 語の解説を要求します（出版社ゲート無効の条件）`);
+
+    const res = await chrome.runtime.sendMessage({
+      type: 'GET_GLOSS_DEFS',
+      seriesId,
+      seriesName: s.meta?.name ?? '',
+      terms: wanted,
+      targetLang: LANG,
+      langLabel: '日本語',
+    });
+    const defs = (res && res.defs) || {};
+    console.log(`解説が返った語 ${Object.keys(defs).length} 件:`, Object.keys(defs));
+    return defs;
+  };
+
   /** 失敗キャッシュだけ消す。成功した解説は残す */
   dougDiag.purge = async (id) => {
     const { key, s } = await pickSeries(id);

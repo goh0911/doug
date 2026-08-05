@@ -351,3 +351,25 @@ describe('敬称・階級の略記', () => {
     expect(pickBestResult(FIXTURES.DOOM, 'DOC DOOM', 'marvel')?.publisher?.name).toBe('Marvel');
   });
 });
+
+describe('敬称・階級の略記 - 外しすぎない', () => {
+  it('出版社が不明でも DOC DOOM は DC の Doom を採らない', () => {
+    // 語側だけ敬称を外すと "doc doom" → "doom" が DC の "Doom" に当たる。
+    // 候補名にも敬称がある場合に限って外すことで防ぐ
+    expect(pickBestResult(FIXTURES.DOOM, 'DOC DOOM', null)?.name).toBe('Doctor Doom');
+  });
+
+  it('候補名に敬称が無ければ語の敬称は外さない', () => {
+    expect(passesGate({
+      term: 'DOC DOOM', name: 'Doom',
+      deck: FIXTURES.DOOM[0].deck, publisherName: 'DC Comics', publisher: null,
+    })).toBe(false);
+  });
+
+  it('候補名に敬称があれば語が素でも従来どおり一致する', () => {
+    expect(passesGate({
+      term: 'DOOM', name: 'Doctor Doom',
+      deck: FIXTURES.DOOM[2].deck, publisherName: 'Marvel', publisher: 'marvel',
+    })).toBe(true);
+  });
+});

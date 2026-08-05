@@ -146,10 +146,15 @@ function isSameEntity(term, name, deck) {
   if (t === '' || n === '') return false;
 
   if (n === t) return true;                       // 完全一致
-  // 敬称・階級を両側から外して比べる。台詞では略記で呼ばれるのに記事は正式表記で
-  // 立項されているため（実測: 語 "DOC DOOM" / 候補 "Doctor Doom"）、名前側だけ
-  // 外していると届かない。どちらの表記が略記でも一致させる
-  if (n.replace(HONORIFICS, '') === t.replace(HONORIFICS, '')) return true;
+
+  // 敬称・階級のみの差。台詞では略記で呼ばれるのに候補は正式表記で立項されている
+  // ため（実測: 語 "DOC DOOM" / 候補 "Doctor Doom"）、語側の敬称も外して比べる。
+  //
+  // ただし外すのは**候補名にも敬称が付いているとき**に限る。語側だけ外すと
+  // "DOC DOOM" が DC の "Doom"（別キャラ）に当たってしまう。出版社が分かる経路では
+  // 出版社ゲートが止めるが、未知サイトは publisher: null で素通りする
+  const nStripped = n.replace(HONORIFICS, '');
+  if (nStripped !== n && nStripped === t.replace(HONORIFICS, '')) return true;
 
   // 名前に語を含むのに上の 2 つに当たらない＝個人名や別版が付いている＝別の実体
   if (containsWord(n, t)) return false;
