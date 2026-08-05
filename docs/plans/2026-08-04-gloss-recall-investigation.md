@@ -264,3 +264,80 @@ Wikipedia が記事を持たない FORTEAN / GENERAL FORTEAN を実際に埋め�
 サンプリングや消費の問題ではなく **Nano の出力品質**の問題。
 
 なお `GAMMA FLIGHT` は解決済み（en-wikipedia でヒット）。
+
+---
+
+## 追記（2026-08-05）: 抽出の破綻と、その真因
+
+`ABOMINATION` が抽出されない件を追ったところ、**抽出そのものが壊れていた**ことが
+判明した。オプションページで実パイプラインと同じプロンプトを Nano に投げて計測。
+
+### 症状
+
+Nano が「台詞を丸ごと `original` に写す」モードに落ちる。プロンプトが
+「悪い例（文をそのまま返している。禁止）」として明示的に禁じている出力そのもの。
+
+```json
+{"original":"FIRST YOU KILL TWO GAMMA FLIGHT MEMBERS RETRIEVING THE ABOMINATION SHELL--ON YOUR SO-CALLED STEALTH ", ...}
+```
+
+`parseCandidatesJson` が 30 字超を落とすため 10 件中 9 件は消えるが、生き残った
+1 件が `"THE MAN IS BARELY COLD--"` として**用語集に登録されていた**。用語集の
+`NO HUMAN CASUALTIES` / `THE IMM` / `B-GOW` / `GAMMA GUY` はすべてこの経路で入った。
+**長さフィルタは破綻を防いでおらず、破綻を見えなくしていただけだった。**
+
+### 真因: 訳ゆれ検出の出力スキーマ
+
+同一入力・`temperature: 0` / `topK: 1` の A/B（10 ペア。完全に再現する）:
+
+| 条件 | 時間 | JSON | 丸写し | 採用 |
+|---|---|---|---|---|
+| A 現行 | 32.9s | 10 件 | **9 件** | 1（誤検出） |
+| B 訳ゆれ節なし | **1.2s** | 1 件 | **0 件** | 1 |
+| C 現行 + responseConstraint | 3.5s | 3 件 | 1 件 | 3 |
+
+全候補が `"inconsistent":true` かつ variants が translated と同一という不自然な形で、
+モデルが出力テンプレートの最も複雑な形を埋めることに引きずられ、抽出タスク自体を
+見失っていた。`EXTRACTION_PAIRS_PER_RUN = 10` では防げていない。
+
+**`responseConstraint`（JSON Schema で original を 30 字に制限）は採用しない。**
+丸写しを「30 字で切り詰めた偽物」に変換するだけで、C では
+`"ANY OBJECTIONS TO ME TAKING LE"` が生成され `sanitizeCandidate` を素通りした。
+既存の長さフィルタが偶然 9/10 を落としていたのに対し、制約版はそれを通す分だけ悪化する。
+
+### 修正（f816073）
+
+1. 抽出プロンプトから訳ゆれ検出を削除
+2. 訳ゆれ判定を `mergeCandidates` の純粋な文字列比較に移動。
+   副次的に検出範囲が 1 バッチ 10 ペア内 → 巻をまたいだ全履歴に広がる
+3. 除外リストを `addedAt` 降順に。`slice(-N)` は「新しい側」を採るつもりだったが、
+   `chrome.storage` はオブジェクトを `base::Value::Dict`（キーがソートされる flat_map）で
+   保持するため、読み戻した用語集の `Object.keys()` は辞書順になっていた
+4. 5 語以上の原語を却下（実在する最長級の固有名詞が `ALPHA FLIGHT SPACE STATION` の 4 語）
+
+修正後の実測: 応答 1917 字 / 32.9 秒 → **205 字 / 丸写し 0 件**、
+`DOC DOOM` `GAMMA FLIGHT` `LANGKOWSKI` `WALT` を正しく抽出。
+
+### `ABOMINATION` は Nano の認識限界
+
+該当ペア 1 件だけを渡しても抽出されない。同じ文から `GAMMA FLIGHT` は拾える。
+
+```
+入力: "FIRST YOU KILL TWO GAMMA FLIGHT MEMBERS RETRIEVING THE ABOMINATION SHELL--..."
+出力: [{"original":"GAMMA FLIGHT", ...}]
+```
+
+除外リストなし・良い例の追加でも改善しない（3 条件とも新規 0 件）。
+`abomination` は英語の一般名詞であり、`THE ABOMINATION SHELL` を普通名詞句と読むのは
+妥当な判断でもある。`DOOM` / `LEADER` / `VISION` と同じ「一般名詞と同形のキャラクター名」
+クラスで、無理に取りに行くと `sanitizeCandidate` が既に対策した `MENTOR`（訳: 恩師 →
+タノスの父の解説が出た）型の誤検出が復活する。**追わない。手動追加で補う。**
+
+### 残課題: 愛称・略称の正規化
+
+`DOC DOOM` は抽出され、両ソースに問い合わせもされたうえで失敗する。記事は
+`Doctor Doom` にあるが `DOC DOOM` という表記は本文に無いため `termAppearsIn` が通らず、
+Comic Vine の `isSameEntity` も `DOC` と `Doctor` を別物として扱う。
+`DOC` → `DOCTOR` のような敬称略称の正規化で対処できるクラス。着手する場合は
+`tests/fixtures/wiki-articles.json` で **Brian Banner / Reggie Mantle が却下され続ける**
+不変条件を守ること。
