@@ -215,3 +215,52 @@ Codex によるセカンドオピニオンで、私が見落としていた経�
 
 今回判明した問題はいずれも 2.1.0 の変更が原因ではなく、以前からの状態。
 2.1.0 のリリースを止める理由は無い。**ただし当たり率の問題は未解決のまま残る。**
+
+---
+
+## 追記（2026-08-05）: 失敗キャッシュの焼き付き
+
+Comic Vine を実装（`591becb`）したのに下線が増えなかった。原因は **Comic Vine が
+一度も呼ばれていなかった**こと。
+
+`resolveGlossDefs` は「キャッシュに使える値が無い語」だけを取得対象にするが
+（`background.js`）、`isUsable` は `failed` エントリを 24 時間「使える」と判定していた。
+そのため Comic Vine 導入**前**に失敗した語は、24 時間経つまで新ソースを試す経路に
+到達しない。
+
+実測での確定:
+
+| | |
+|---|---|
+| FORTEAN / WALT の失敗時刻 | 8/4 19:30 |
+| Comic Vine の commit | 8/4 21:38 |
+
+失敗エントリを手で削除して再翻訳したところ下線が増え、ソース内訳は
+`comicvine: ['DR. MCGOWAN', 'DR. McGOWAN', 'FORTEAN', 'GENERAL FORTEAN', 'REGGIE',
+'TONY STARK', 'WALTER']` / `en-wikipedia: 19 件` となった。**Comic Vine は
+Wikipedia が記事を持たない FORTEAN / GENERAL FORTEAN を実際に埋めている。**
+
+### 修正
+
+失敗エントリに「どの世代の・どのソース構成で失敗したか」を指紋として記録し、
+現在の指紋と違えば無効にする。
+
+- `utils/gloss-cache.js` の `isUsable(entry, now, sourcesKey)` に第 3 引数を追加。
+  失敗エントリは `entry.sources === sourcesKey` のときだけ 24 時間有効。
+  指紋を持たない旧エントリは無効（いつの構成か分からないため）
+- `background.js` の `glossSourcesKey()` が `${GLOSS_PIPELINE_EPOCH}:${使えるソース id}` を返す。
+  「使える」＝ origin 権限があり、必要な設定（Comic Vine の API キー）も済んでいる
+- `GLOSS_PIPELINE_EPOCH` は手で上げる定数。**ソース構成が変わらない改修
+  （`passesGate` の緩和・プロンプト変更など）を実機に届かせる唯一の手段。**
+  ゲートや素材の取り方を変えたら必ず上げる
+
+この欠陥は今回だけの事故ではない。8/4 の抽出修正とゲート修正も、同じ理由で
+実機に反映されるまで最大 24 時間見えなかった。
+
+### 残る課題（②抽出漏れ）
+
+`ABOMINATION` / `DOC DOOM` / `DOOM` は依然として用語集に入らない。
+材料は揃っている（`recentPairs` に該当ペアが存在することを確認済み）ため、
+サンプリングや消費の問題ではなく **Nano の出力品質**の問題。
+
+なお `GAMMA FLIGHT` は解決済み（en-wikipedia でヒット）。

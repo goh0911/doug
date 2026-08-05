@@ -13,15 +13,28 @@ function byteLength(value) {
 }
 
 /**
- * キャッシュエントリがそのまま使えるか（＝再取得が不要か）を判定する
+ * キャッシュエントリがそのまま使えるか（＝再取得が不要か）を判定する。
+ *
+ * 失敗エントリは 24 時間有効だが、それは「同じ条件で引き直しても同じ結果になる」
+ * という前提の上に成り立つ。前提が崩れる変更——ソースの追加・API キーの設定・
+ * 検証ゲートの改修——を入れたときに失効させないと、改善が丸一日見えないまま
+ * 「直っていない」と誤診することになる（実測: Comic Vine を追加した直後、
+ * その前に焼き付いた失敗エントリのせいで新ソースが一度も呼ばれなかった）。
+ *
  * @param {object} entry
  * @param {number} now
+ * @param {string} [sourcesKey] 現在のソース構成の指紋。省略時は構成を見ない（旧挙動）
  * @returns {boolean}
  */
-export function isUsable(entry, now) {
+export function isUsable(entry, now, sourcesKey) {
   if (!entry || typeof entry !== 'object') return false;
   if (typeof entry.at !== 'number') return false;
-  if (entry.failed === true) return now - entry.at < FAILED_TTL_MS;
+  if (entry.failed === true) {
+    // 指紋が変わった（＝当時と今で引ける先が違う）失敗は無効。指紋を持たない
+    // 旧エントリも、いつの構成で失敗したか分からない以上は無効として引き直す
+    if (typeof sourcesKey === 'string' && entry.sources !== sourcesKey) return false;
+    return now - entry.at < FAILED_TTL_MS;
+  }
   return typeof entry.identity === 'string' || typeof entry.powers === 'string';
 }
 

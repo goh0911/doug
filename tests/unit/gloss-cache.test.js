@@ -33,6 +33,42 @@ describe('isUsable', () => {
   });
 });
 
+describe('isUsable — ソース構成の指紋', () => {
+  const WIKI = '2:en-wikipedia';
+  const BOTH = '2:en-wikipedia+comicvine';
+  const failedWith = (sources, at = NOW) => ({ failed: true, at, sources });
+
+  it('指紋が一致する失敗は 24 時間有効のまま', () => {
+    expect(isUsable(failedWith(WIKI, NOW - 1000), NOW, WIKI)).toBe(true);
+  });
+
+  it('指紋が変わった失敗は即座に無効（新ソース追加を待たずに反映する）', () => {
+    // Comic Vine 導入前に Wikipedia だけで失敗した語は、導入後は引き直す
+    expect(isUsable(failedWith(WIKI, NOW - 1000), NOW, BOTH)).toBe(false);
+  });
+
+  it('世代（epoch）だけ変わった場合も無効', () => {
+    expect(isUsable(failedWith('1:en-wikipedia', NOW - 1000), NOW, WIKI)).toBe(false);
+  });
+
+  it('指紋を持たない旧エントリは無効（いつの構成か分からないため引き直す）', () => {
+    expect(isUsable(failed(NOW - 1000), NOW, WIKI)).toBe(false);
+  });
+
+  it('指紋を渡さなければ従来どおり時間だけで判定する', () => {
+    expect(isUsable(failedWith(WIKI, NOW - 1000), NOW)).toBe(true);
+    expect(isUsable(failed(NOW - 1000), NOW)).toBe(true);
+  });
+
+  it('指紋が一致していても 24 時間を超えれば無効', () => {
+    expect(isUsable(failedWith(WIKI, NOW - FAILED_TTL_MS - 1), NOW, WIKI)).toBe(false);
+  });
+
+  it('成功エントリは指紋の影響を受けない', () => {
+    expect(isUsable(ok(NOW - FAILED_TTL_MS * 100), NOW, BOTH)).toBe(true);
+  });
+});
+
 describe('trimGlossDefs', () => {
   it('上限以下ならそのまま返す', () => {
     const m = { A: ok(), B: ok() };

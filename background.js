@@ -551,12 +551,45 @@ const comicVineSource = {
   id: CV.SOURCE_ID,
   origin: CV.COMICVINE_ORIGIN,
   fetchEntry: fetchComicVineEntry,
+  // 権限があってもキーが無ければ何も引けない。失敗キャッシュの指紋に効かせるため、
+  // 「使えるか」を権限と分けて表現する
+  isConfigured: async () => {
+    const { comicvineApiKey = '' } = await chrome.storage.local.get('comicvineApiKey').catch(() => ({}));
+    return String(comicvineApiKey).trim() !== '';
+  },
 };
 
 // 順序が意味を持つ。Wikipedia を先に引く（百科事典的な通史が書かれており、
 // 主要キャラでは Comic Vine より記述が厚い）。Comic Vine は Wikipedia が
 // 記事を持たない語だけを拾うサブソースとして後ろに置く
 const GLOSS_SOURCES = [wikipediaSource, comicVineSource];
+
+/**
+ * 解説パイプラインの世代。検証ゲート・プロンプト・素材の取り方を変えたら手で上げる。
+ * 上げると既存の失敗キャッシュが失効し、次のホバーで引き直される。
+ * ソース構成が変わらない改修（passesGate の緩和など）を実機に届かせる唯一の手段。
+ */
+const GLOSS_PIPELINE_EPOCH = 1;
+
+/** いま実際に引けるソースの id（権限があり、必要な設定も済んでいるもの） */
+async function availableSourceIds() {
+  const ids = [];
+  for (const source of GLOSS_SOURCES) {
+    const granted = await chrome.permissions.contains({ origins: [source.origin] }).catch(() => false);
+    if (!granted) continue;
+    if (typeof source.isConfigured === 'function' && !(await source.isConfigured().catch(() => false))) continue;
+    ids.push(source.id);
+  }
+  return ids;
+}
+
+/**
+ * 失敗キャッシュの指紋。「どの世代の・どのソース構成で失敗したか」を表す。
+ * これが現在の値と違う失敗エントリは信用しない（utils/gloss-cache.js の isUsable）
+ */
+async function glossSourcesKey() {
+  return `${GLOSS_PIPELINE_EPOCH}:${(await availableSourceIds()).join('+')}`;
+}
 
 /** URL からホスト名を取り出す（取れなければ空文字） */
 function hostOf(url) {
@@ -577,10 +610,12 @@ function seriesHost(series) {
  * @returns {{ material: object|null, transient: boolean }}
  */
 async function fetchFromSources(term, seriesName, publisher, opts = {}) {
+  // 指紋の算出と同じ「使えるソース」判定を使う。ここがずれると、
+  // 引いてもいないソースの id が指紋に混ざる（＝失効の判断が狂う）
+  const available = new Set(await availableSourceIds());
   let transient = false;
   for (const source of GLOSS_SOURCES) {
-    const granted = await chrome.permissions.contains({ origins: [source.origin] }).catch(() => false);
-    if (!granted) continue;
+    if (!available.has(source.id)) continue;
     const r = await source.fetchEntry(term, seriesName, publisher, opts);
     if (r && r.material) return { material: { ...r.material, sourceId: source.id }, transient: false };
     if (r && r.transient) transient = true;
@@ -597,8 +632,11 @@ async function fetchFromSources(term, seriesName, publisher, opts = {}) {
  *   Nano が使えず生成できなかった場合は null を返す（=「失敗」としてキャッシュしない。
  *   hover 時に nanoOnly=false で再試行できるようにするため。cf. isUsable の 24h 失敗キャッシュ）
  */
-async function buildGlossEntry(term, seriesName, langLabel, nanoOnly = false, publisher = null) {
+async function buildGlossEntry(term, seriesName, langLabel, nanoOnly = false, publisher = null, sourcesKey = '') {
   const now = Date.now();
+  // 失敗エントリには「どの構成で失敗したか」を必ず残す。これが無いと、
+  // ソースやゲートを直しても 24 時間は再試行されない
+  const failedEntry = { failed: true, at: now, sources: sourcesKey };
   // 先読み（非対話）だけ maxlag を付ける。hover 経路で付けると DB 遅延時に無応答になる
   const { material, transient } = await fetchFromSources(term, seriesName, publisher,
     nanoOnly ? { maxlag: GLOSS_PREFETCH_MAXLAG } : {});
@@ -606,7 +644,7 @@ async function buildGlossEntry(term, seriesName, langLabel, nanoOnly = false, pu
     // 一時的失敗（レート制限・通信断・maxlag）は「今回は試さなかった」扱いにして
     // 24 時間の失敗キャッシュに焼き付けない。null は呼び出し側が保存せず次回再試行する
     if (transient) return null;
-    return { failed: true, at: now };
+    return failedEntry;
   }
 
   const prompt = buildGlossPrompt({
@@ -621,10 +659,10 @@ async function buildGlossEntry(term, seriesName, langLabel, nanoOnly = false, pu
   let parsed = plan.tryNano ? await generateWithNano(prompt, term) : null;
   if (!parsed) {
     // 先読み（nanoOnly）では有料 API を呼ばない。失敗としてキャッシュもしない
-    if (!plan.allowApiFallback) return nanoOnly ? null : { failed: true, at: now };
+    if (!plan.allowApiFallback) return nanoOnly ? null : failedEntry;
     parsed = await generateGlossWithApi(prompt, term);
   }
-  if (!parsed) return { failed: true, at: now };
+  if (!parsed) return failedEntry;
 
   // R-W18: 記事本文・抽出テキストは保存しない
   return {
@@ -667,8 +705,9 @@ async function resolveGlossDefs({ seriesId, seriesName, terms, targetLang, langL
     try {
       const now = Date.now();
       const cached = await getGlossDefs(seriesId, targetLang);
+      const sourcesKey = await glossSourcesKey();
       const wanted = Array.isArray(terms) ? [...new Set(terms.filter((t) => typeof t === 'string' && t))] : [];
-      let missing = wanted.filter((t) => !isUsable(cached[t], now));
+      let missing = wanted.filter((t) => !isUsable(cached[t], now, sourcesKey));
 
       // 1 リクエストあたりの fetch/LLM 呼び出し回数に上限を設ける（レビュー Important 1）。
       // 超過分は今回は処理しない（黙って落とさず記録だけ残す）
@@ -701,8 +740,8 @@ async function resolveGlossDefs({ seriesId, seriesName, terms, targetLang, langL
           // （Codex 指摘）。sender.tab が取れない場合だけ保存済みホストに落とす
           const publisher = expectedPublisher(host || seriesHost(seriesExists));
           await mapWithConcurrency(missing, GLOSS_CONCURRENCY, async (term) => {
-            const entry = await buildGlossEntry(term, seriesName, langLabel, nanoOnly, publisher)
-              .catch(() => ({ failed: true, at: now }));
+            const entry = await buildGlossEntry(term, seriesName, langLabel, nanoOnly, publisher, sourcesKey)
+              .catch(() => ({ failed: true, at: now, sources: sourcesKey }));
             if (entry === null) return;
             cached[term] = entry;
             const stored = await putGlossDefs(seriesId, targetLang, cached);
