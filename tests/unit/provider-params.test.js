@@ -1,0 +1,78 @@
+// tests/unit/provider-params.test.js
+// OpenAI の Chat Completions と Anthropic の /v1/messages は、出力上限のパラメータ名が違う。
+// GPT-5 系（推論モデル）は max_tokens を 400 で拒否し、max_completion_tokens を要求する。
+// 一方 Claude は max_tokens が正で、一括置換すると今度は Claude が壊れる。
+// 実 API を叩けない環境でも取り違えを検出できるよう、リクエストボディを静的に検査する。
+import { describe, it, expect } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { dirname, join } from 'node:path';
+
+const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
+const source = readFileSync(join(ROOT, 'translate.js'), 'utf8');
+
+/**
+ * コメント（// 行・ブロック）を落とす。説明文中の語をパラメータ名と誤検出しないため。
+ * `https://` の `//` を巻き込まないよう、直前が `:` のものは残す
+ */
+function stripComments(src) {
+  return src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/.*$/gm, '$1');
+}
+
+/**
+ * 指定 URL を含む fetch 呼び出しの直後から、JSON.stringify で組み立てるボディを
+ * 波括弧の対応で切り出す。translate.js は URL とボディが隣接して書かれている前提。
+ */
+function extractBodiesNear(src, urlFragment) {
+  const clean = stripComments(src);
+  const bodies = [];
+  let searchFrom = 0;
+
+  for (;;) {
+    const hit = clean.indexOf(urlFragment, searchFrom);
+    if (hit === -1) break;
+    searchFrom = hit + urlFragment.length;
+
+    const stringify = clean.indexOf('JSON.stringify({', hit);
+    if (stringify === -1) continue;
+    // 同じ呼び出しに属するボディだけを見る（次の URL 出現より手前）
+    const nextHit = clean.indexOf(urlFragment, searchFrom);
+    if (nextHit !== -1 && stringify > nextHit) continue;
+
+    const open = clean.indexOf('{', stringify);
+    let depth = 0;
+    for (let i = open; i < clean.length; i++) {
+      if (clean[i] === '{') depth++;
+      else if (clean[i] === '}') {
+        depth--;
+        if (depth === 0) {
+          bodies.push(clean.slice(open, i + 1));
+          break;
+        }
+      }
+    }
+  }
+  return bodies;
+}
+
+describe('プロバイダごとの出力上限パラメータ名', () => {
+  it('OpenAI のリクエストボディは max_completion_tokens を使う（max_tokens は 400 になる）', () => {
+    const bodies = extractBodiesNear(source, 'api.openai.com/v1/chat/completions');
+    expect(bodies.length).toBe(2); // 画像翻訳と解説生成フォールバック
+
+    for (const body of bodies) {
+      expect(body).toMatch(/\bmax_completion_tokens\s*:/);
+      expect(body).not.toMatch(/\bmax_tokens\s*:/);
+    }
+  });
+
+  it('Anthropic のリクエストボディは max_tokens を使う（一括置換の巻き添えを防ぐ）', () => {
+    const bodies = extractBodiesNear(source, 'api.anthropic.com/v1/messages');
+    expect(bodies.length).toBe(2); // 画像翻訳と解説生成フォールバック
+
+    for (const body of bodies) {
+      expect(body).toMatch(/\bmax_tokens\s*:/);
+      expect(body).not.toMatch(/\bmax_completion_tokens\s*:/);
+    }
+  });
+});

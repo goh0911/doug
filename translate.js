@@ -346,7 +346,9 @@ async function translateImageWithOpenAI(apiKey, imageDataUrl, prompt, imageDims,
   const url = 'https://api.openai.com/v1/chat/completions';
   const body = JSON.stringify({
     model: model || 'gpt-5.6-sol',
-    max_tokens: 32000,
+    // GPT-5 系（推論モデル）は max_tokens を 400 で拒否する。Chat Completions では
+    // max_completion_tokens が正（Claude の /v1/messages は max_tokens のままなので注意）
+    max_completion_tokens: 32000,
     messages: [{
       role: 'user',
       content: [
@@ -528,15 +530,19 @@ export async function callTextOnlyProvider(prompt) {
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
         body: JSON.stringify({
           model: settings.openaiModel || 'gpt-5.6-sol',
-          // translateImageWithOpenAI と同じく max_tokens（max_completion_tokens ではない）
-          max_tokens: 512,
+          // translateImageWithOpenAI と同じく max_completion_tokens（max_tokens ではない）。
+          // GPT-5 系は推論トークンもこの上限に数えるため、512 だと推論だけで使い切って
+          // content が空文字で返る（finish_reason: 'length'）。解説 JSON 用に余裕を持たせる
+          max_completion_tokens: 4096,
           messages: [{ role: 'user', content: prompt }],
         }),
         signal: controller.signal,
       }, 'ChatGPT');
       if (!res.ok) return null;
       const data = await res.json();
-      return data.choices?.[0]?.message?.content ?? null;
+      // 推論だけで上限に達すると content は空文字で返る。?? では素通りして
+      // 「失敗時は null」の契約を破るため、空文字も null に倒す
+      return data.choices?.[0]?.message?.content || null;
     }
 
     if (provider === 'ollama') {
