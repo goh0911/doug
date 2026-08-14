@@ -1103,18 +1103,22 @@
     return luminance < 128 ? 'white' : 'black';
   }
 
+  // 枠線を検出できなかったときの代替色。背景から輝度を離して境界を見せる。
+  // 一律に暗くすると黒地キャプションでは背景と同化して枠線が消えるため、
+  // 暗い背景では逆に明るくする
   function darkenColor(cssValue) {
     // linear-gradient の場合、最初のHEXを抽出
     const match = cssValue.match(/#[0-9a-fA-F]{3,8}/);
     if (!match) return null;
     const hex6 = normalizeHex(match[0]);
     if (!hex6) return null;
-    // hex → RGB → 30%暗く → hex
     const r = parseInt(hex6.slice(1, 3), 16);
     const g = parseInt(hex6.slice(3, 5), 16);
     const b = parseInt(hex6.slice(5, 7), 16);
     if (isNaN(r) || isNaN(g) || isNaN(b)) return null;
-    const d = (v) => Math.round(v * 0.7).toString(16).padStart(2, '0');
+    const isDark = 0.299 * r + 0.587 * g + 0.114 * b < 128;
+    // 明るい背景は 30% 暗く、暗い背景は白へ 35% 寄せる
+    const d = (v) => Math.round(isDark ? v + (255 - v) * 0.35 : v * 0.7).toString(16).padStart(2, '0');
     return `#${d(r)}${d(g)}${d(b)}`;
   }
 
@@ -1213,10 +1217,13 @@
       }
     }
     if (candidates.length < 3) return null;
-    candidates.sort((a, b) => a.lum - b.lum);
-    const dark = candidates.slice(0, Math.ceil(candidates.length / 3));
-    const n = dark.length;
-    const avg = dark.reduce((acc, c) => ({ r: acc.r + c.r, g: acc.g + c.g, b: acc.b + c.b }), { r: 0, g: 0, b: 0 });
+    // 枠線は背景から輝度が離れた側にある。明るい吹き出しなら暗い枠線、黒地キャプション
+    // なら明るい枠線。常に暗い側を採ると、黒地では「背景より明るい候補のうち最も暗い色」
+    // を枠線にしてしまい、黒い吹き出しに白っぽい枠が付く
+    candidates.sort((a, b) => bgLum < 128 ? b.lum - a.lum : a.lum - b.lum);
+    const picked = candidates.slice(0, Math.ceil(candidates.length / 3));
+    const n = picked.length;
+    const avg = picked.reduce((acc, c) => ({ r: acc.r + c.r, g: acc.g + c.g, b: acc.b + c.b }), { r: 0, g: 0, b: 0 });
     return `#${toHex(avg.r / n)}${toHex(avg.g / n)}${toHex(avg.b / n)}`;
   }
 

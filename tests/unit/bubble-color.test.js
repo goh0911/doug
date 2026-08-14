@@ -26,9 +26,10 @@ function extractFunction(src, name) {
   throw new Error(`${name} の終端が見つからない`);
 }
 
-const body = ['toHex', 'dominantColor', 'sampleBackground'].map(n => extractFunction(source, n)).join('\n');
-const { dominantColor, sampleBackground } = new Function(
-  `${body}\nreturn { dominantColor, sampleBackground };`
+const NAMES = ['toHex', 'normalizeHex', 'dominantColor', 'sampleBackground', 'sampleBorder', 'darkenColor'];
+const body = NAMES.map(n => extractFunction(source, n)).join('\n');
+const { dominantColor, sampleBackground, sampleBorder, darkenColor } = new Function(
+  `${body}\nreturn { ${NAMES.join(', ')} };`
 )();
 
 /** getImageData だけを持つ最小の ctx。sampleBackground は data しか見ない */
@@ -126,5 +127,50 @@ describe('dominantColor / sampleBackground', () => {
     const data = makeData(10, 10, () => WHITE);
     expect(sampleBackground(ctxOf(data), 5, 5, 5, 5)).toBeNull();
     expect(sampleBackground(ctxOf(data), 0, 0, NaN, 10)).toBeNull();
+  });
+});
+
+describe('sampleBorder（枠線色）', () => {
+  const W = 80, H = 50;
+  const ART = { r: 120, g: 120, b: 120 }; // 拡張領域の外側に入るコマの絵
+
+  /** 外周 2px はコマの絵、その内側 2px が枠線、さらに内側が吹き出しの塗り */
+  const framed = (fill, borderColor) => (x, y) => {
+    const d = Math.min(x, y, W - 1 - x, H - 1 - y);
+    if (d < 2) return ART;
+    if (d < 4) return borderColor;
+    return fill;
+  };
+
+  it('白い吹き出しの黒い枠線を取れる', () => {
+    const data = makeData(W, H, framed(WHITE, BLACK_INK));
+    const got = sampleBorder(ctxOf(data), 0, 0, W, H, '#ffffff');
+    const { r, g, b } = hexToRgb(got);
+    const lum = 0.299 * r + 0.587 * g + 0.114 * b;
+    expect(lum).toBeLessThan(90); // 絵(120)ではなく枠線(20)側を拾う
+  });
+
+  // 修正前は候補を常に「暗い側 1/3」から採っていたため、黒地では背景より明るい候補の
+  // うち最も暗い色＝コマの絵を枠線にしてしまい、黒い吹き出しに白っぽい枠が付いていた
+  it('黒地キャプションの明るい枠線を取れる', () => {
+    const fill = { r: 18, g: 18, b: 24 };
+    const data = makeData(W, H, framed(fill, { r: 240, g: 240, b: 240 }));
+    const got = sampleBorder(ctxOf(data), 0, 0, W, H, '#121218');
+    const { r, g, b } = hexToRgb(got);
+    const lum = 0.299 * r + 0.587 * g + 0.114 * b;
+    expect(lum).toBeGreaterThan(180); // 絵(120)ではなく枠線(240)側を拾う
+  });
+});
+
+describe('darkenColor（枠線が取れなかったときの代替色）', () => {
+  it('明るい背景は暗くする', () => {
+    const { r, g, b } = hexToRgb(darkenColor('#ffffff'));
+    expect(0.299 * r + 0.587 * g + 0.114 * b).toBeLessThan(200);
+  });
+
+  // 一律に暗くすると黒地では背景と同化して枠線が見えなくなる
+  it('暗い背景は明るくする', () => {
+    const { r, g, b } = hexToRgb(darkenColor('#121218'));
+    expect(0.299 * r + 0.587 * g + 0.114 * b).toBeGreaterThan(60);
   });
 });
