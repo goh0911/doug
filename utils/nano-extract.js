@@ -168,7 +168,7 @@ export function parseCandidatesJson(text) {
  * @param {Object} glossaryLangMap 既存の lang 用語集
  * @param {Array<{ original: string, translated: string }>} candidates
  * @param {Array<string>} rejectedOriginals
- * @returns {{ glossaryLangMap: Object, added: number }}
+ * @returns {{ glossaryLangMap: Object, added: number, addedOriginals: Array<string> }}
  */
 /**
  * 一方が他方の途中で切れた表記か（UNITED STATES MILIT / UNITED STATES MILITARY）。
@@ -188,7 +188,10 @@ function isTruncationOf(shorter, longer) {
 
 export function mergeCandidates(glossaryLangMap, candidates, rejectedOriginals = []) {
   const rejectedSet = new Set(rejectedOriginals);
-  let added = 0;
+  // addedOriginals は解説の即時生成に使う。抽出で新しく入った語は「直前に読んだページに
+  // 出ていた語」なので、ここで拾わないと解説の生成条件（いまページに出ている語）から
+  // 外れ、そのページを再訪しない限り永久に生成されない
+  const addedOriginals = [];
   const next = { ...glossaryLangMap };
 
   for (const c of candidates) {
@@ -233,10 +236,10 @@ export function mergeCandidates(glossaryLangMap, candidates, rejectedOriginals =
       source: 'nano-extract',
       ...(c.inconsistent && Array.isArray(c.variants) ? { variants: c.variants, inconsistent: true } : {}),
     };
-    added++;
+    addedOriginals.push(c.original);
   }
 
-  return { glossaryLangMap: next, added };
+  return { glossaryLangMap: next, added: addedOriginals.length, addedOriginals };
 }
 
 /** 訳文中のカタカナ連続（3 文字以上）の個数。日本語では固有名詞の指標になる */

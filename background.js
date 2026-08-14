@@ -320,6 +320,7 @@ async function runExtractionBg(seriesId) {
     // success:false でも呼ぶ（extractionRunning の解放と失敗回数の記録を store 側が行う）
     // consumedPairs は success:true の経路でしか使われない（失敗時にペアを捨てない）
     const applied = await applyExtractionResult({ seriesId, candidates, success, consumedPairs });
+    await generateGlossForNewTerms(seriesId, applied);
     return (applied && applied.added) || 0;
   } catch {
     /* 抽出の失敗は翻訳結果に影響させない */
@@ -327,6 +328,43 @@ async function runExtractionBg(seriesId) {
   } finally {
     extractionInFlight.delete(seriesId);
   }
+}
+
+/**
+ * 抽出で用語集に入ったばかりの語の解説を、その場で作る。
+ *
+ * content.js の loadGlossDefs は「いまページに出ている語」しか解説を要求しない。
+ * 一方で用語集への登録は EXTRACTION_PAIRS_PER_RUN 件ごとにまとめて走るため、
+ * 語が登録される頃には、その語が出ていたページを読み終えている。結果、同じページを
+ * 再訪しない限り解説が永久に作られなかった（実機: 用語集 124 語中 86 語が未生成、
+ * GALACTUS / S.H.I.E.L.D. / JOE FIXIT はいずれも「失敗」ですらなく未試行）。
+ *
+ * 抽出直後の新語は定義上「直前に読んだページに出ていた語」なので、ここで作れば
+ * タイミングのずれが埋まる。かつて撤回された全語先読みと違い対象は新語だけで、
+ * 生成する語の総数は変わらない（早まるだけ）。上限は resolveGlossDefs 内の
+ * GLOSS_MAX_TERMS_PER_RUN が担保する。
+ */
+async function generateGlossForNewTerms(seriesId, applied) {
+  const terms = (applied && applied.addedOriginals) || [];
+  if (terms.length === 0) return;
+  // 機能が OFF・権限が無いなら何もしない（content.js 側の経路と同じ前提を置く）
+  const { glossEnabled = false } = await chrome.storage.local.get('glossEnabled');
+  if (!glossEnabled) return;
+  const granted = await chrome.permissions.contains({ origins: [WIKIPEDIA_ORIGIN] }).catch(() => false);
+  if (!granted) return;
+  const series = await getSeries(seriesId);
+  if (!series) return;
+  try {
+    await resolveGlossDefs({
+      seriesId,
+      seriesName: series.name,
+      // applyExtractionResult と同じく ja 固定（Phase 4 は ja のみ対象）
+      terms,
+      targetLang: 'ja',
+      langLabel: '日本語',
+      nanoOnly: false,
+    });
+  } catch { /* 解説を作れなくても抽出の成否には影響させない */ }
 }
 
 // ============================================================
@@ -418,7 +456,8 @@ async function tryWikipediaQuery(term, seriesName, publisher, opts = {}) {
   if (!page) return QUERY_MISS;
 
   const intro = extractIntro(page.extract);
-  const powers = extractPowers(page.extract);
+  // term を渡すのは、能力節が人格ごとに割れている記事で別人の説明を拾わないため
+  const powers = extractPowers(page.extract, term);
   // 誤ったページを黙って採用しないための唯一の関門（設計書 §1.2）。
   // term / title を渡さないと記事の同一性を検証できない（別人の解説が出る）
   if (!passesGate({ term, title: page.title, intro, powers, publisher })) return QUERY_MISS;

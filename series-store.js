@@ -337,7 +337,7 @@ export async function applyExtractionResult({ seriesId, candidates, success, con
       }
       series.extractionRunning = null;
       await chrome.storage.local.set({ [`series:${seriesId}`]: series });
-      return { status: 'ok', added: 0 };
+      return { status: 'ok', added: 0, addedOriginals: [] };
     }
 
     // 成功: 候補マージ
@@ -346,7 +346,7 @@ export async function applyExtractionResult({ seriesId, candidates, success, con
     const glossaryLangMap = glossary[targetLang] ?? {};
     const rejectedOriginals = series.rejectedOriginals ?? [];
 
-    const { glossaryLangMap: nextGlossaryLangMap, added } = mergeCandidates(glossaryLangMap, candidates, rejectedOriginals);
+    const { glossaryLangMap: nextGlossaryLangMap, added, addedOriginals } = mergeCandidates(glossaryLangMap, candidates, rejectedOriginals);
 
     series.glossary = {
       ...glossary,
@@ -390,7 +390,7 @@ export async function applyExtractionResult({ seriesId, candidates, success, con
     };
 
     await chrome.storage.local.set({ [`series:${seriesId}`]: series });
-    return { status: 'ok', added, glossaryLangMap: nextGlossaryLangMap };
+    return { status: 'ok', added, addedOriginals, glossaryLangMap: nextGlossaryLangMap };
   });
 }
 

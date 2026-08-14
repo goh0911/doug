@@ -720,3 +720,44 @@ describe('sanitizeCandidate - 記号始まりの候補の除外（実機で Nano
     }
   });
 });
+
+// 抽出直後に解説を作るため、どの語が新しく入ったかを呼び出し側へ返す必要がある。
+// 件数（added）だけでは対象語が分からず、解説生成をキックできない
+describe('mergeCandidates が新しく入った語を返す', () => {
+  it('追加した語の original を addedOriginals に入れる', () => {
+    const { added, addedOriginals } = mergeCandidates({}, [
+      { original: 'GALACTUS', translated: 'ギャラクタス' },
+      { original: 'JOE FIXIT', translated: 'ジョー・フィグジット' },
+    ]);
+    expect(added).toBe(2);
+    expect(addedOriginals).toEqual(['GALACTUS', 'JOE FIXIT']);
+  });
+
+  it('既存語は含めない（訳ゆれで variants が付くだけの語も対象外）', () => {
+    const existing = { GALACTUS: { translated: 'ギャラクタス', approved: true } };
+    const { added, addedOriginals } = mergeCandidates(existing, [
+      { original: 'GALACTUS', translated: 'ガラクタス' }, // 訳ゆれ
+      { original: 'PUCK', translated: 'パック' },
+    ]);
+    expect(added).toBe(1);
+    expect(addedOriginals).toEqual(['PUCK']);
+  });
+
+  it('却下済みの語は含めない', () => {
+    const { added, addedOriginals } = mergeCandidates({}, [
+      { original: 'MINECRAFT', translated: 'マインクラフト' },
+      { original: 'PUCK', translated: 'パック' },
+    ], ['MINECRAFT']);
+    expect(added).toBe(1);
+    expect(addedOriginals).toEqual(['PUCK']);
+  });
+
+  it('added と addedOriginals.length は常に一致する', () => {
+    const { added, addedOriginals } = mergeCandidates({}, [
+      { original: 'A ONE', translated: 'エーワン' },
+      { original: null, translated: 'x' },
+      { original: 'B TWO', translated: 'ビーツー' },
+    ]);
+    expect(addedOriginals).toHaveLength(added);
+  });
+});
