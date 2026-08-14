@@ -1121,13 +1121,14 @@
   // 0-255 の数値を 2桁 hex 文字列に変換
   function toHex(n) { return Math.max(0, Math.min(255, Math.round(n))).toString(16).padStart(2, '0'); }
 
-  // テキスト bbox 内側から吹き出しの塗り色を取得（hex 文字列 or null）
-  // 暗いピクセル（テキスト・枠線）を輝度フィルタで除外し、残った明るいピクセルの最頻色を返す
-  function sampleBackground(ctx, x1, y1, x2, y2) {
-    const w = x2 - x1;
-    const h = y2 - y1;
-    if (!(w >= 1) || !(h >= 1)) return null;
-    const data = ctx.getImageData(x1, y1, w, h).data;
+  // 明るい側 / 暗い側のどちらか一方だけを見て最頻色を返す（{ hex, n } or null）。
+  //
+  // 量子化を 16 階調（>> 4）にしているのは、色を拾う元が翻訳送信用の WebP 品質 0.65 だから。
+  // 非可逆圧縮で単色の塗りが数百の色ビンに散り、64 階調（>> 2）では最頻シェアが 20% を割って
+  // null に落ちていた（実測: 黄色 15.8% / 344 ビン、ピンク 18.3%）。
+  // ビンは分類にしか使わず、返す色はビン内の平均なので、粗くしても精度は落ちない
+  // （実測: 実際の塗りとの差は最大 R1 G3 B1）。
+  function dominantColor(data, w, h, wantDark) {
     const hist = {};
     let count = 0;
     const STEP = 2;
@@ -1136,10 +1137,8 @@
         const idx = (ly * w + lx) * 4;
         if (data[idx + 3] < 10) continue;
         const r = data[idx], g = data[idx + 1], b = data[idx + 2];
-        // 暗いピクセル（黒テキスト・枠線）を除外
-        const lum = 0.299 * r + 0.587 * g + 0.114 * b;
-        if (lum < 40) continue;
-        const key = ((r >> 2) << 12) | ((g >> 2) << 6) | (b >> 2);
+        if ((0.299 * r + 0.587 * g + 0.114 * b < 40) !== wantDark) continue;
+        const key = ((r >> 4) << 8) | ((g >> 4) << 4) | (b >> 4);
         if (!hist[key]) hist[key] = { rSum: 0, gSum: 0, bSum: 0, count: 0 };
         hist[key].rSum += r; hist[key].gSum += g; hist[key].bSum += b;
         hist[key].count++;
@@ -1149,7 +1148,29 @@
     if (count < 5) return null;
     const best = Object.values(hist).reduce((a, b) => a.count >= b.count ? a : b);
     if (best.count / count < 0.20) return null;
-    return `#${toHex(best.rSum / best.count)}${toHex(best.gSum / best.count)}${toHex(best.bSum / best.count)}`;
+    return {
+      hex: `#${toHex(best.rSum / best.count)}${toHex(best.gSum / best.count)}${toHex(best.bSum / best.count)}`,
+      n: best.count,
+    };
+  }
+
+  // テキスト bbox 内側から吹き出しの塗り色を取得（hex 文字列 or null）
+  //
+  // 「暗いピクセルは文字だから捨てる」という前提を置くと、黒地キャプションでは塗りごと
+  // 消えて白い文字のほうを塗りと誤認する（実測: #121218 の吹き出しに対し #f6f5fa を返す）。
+  // 明暗どちらが塗りかは決め打ちせず、面積が広いほうを塗りとみなす。
+  // 文字が bbox の 6 割超を占める極端な吹き出しでは文字色を拾うが、実際のレタリングの
+  // インク比率は 15〜35% 程度で、黒地キャプションが常に外れる現状より実害が小さい。
+  function sampleBackground(ctx, x1, y1, x2, y2) {
+    const w = x2 - x1;
+    const h = y2 - y1;
+    if (!(w >= 1) || !(h >= 1)) return null;
+    const data = ctx.getImageData(x1, y1, w, h).data;
+    const lit = dominantColor(data, w, h, false);
+    const dark = dominantColor(data, w, h, true);
+    if (!lit) return dark ? dark.hex : null;
+    if (!dark) return lit.hex;
+    return (lit.n >= dark.n ? lit : dark).hex;
   }
 
   // 拡張 bbox（ex1/ey1/ex2/ey2）の外縁から枠線色を取得
