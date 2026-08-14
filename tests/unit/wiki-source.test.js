@@ -119,6 +119,43 @@ describe('extractPowers', () => {
     expect(powers).toBe('Bruce is considered one of the greatest minds.\n\nThe Hulk has limitless strength.');
   });
 
+  // 実機: Hulk の解説に「地球最高の頭脳の一人」＝ Bruce Banner の説明が出た。
+  // 能力節が人格ごとに割れている記事では、対象語に一致する小見出しだけを見る
+  it('term を渡すと、一致する小見出しの本文だけを返す', () => {
+    const a = [
+      '== Powers and abilities ==',
+      '',
+      '==== Bruce Banner ====',
+      'Bruce is considered one of the greatest minds.',
+      '',
+      '==== The Hulk ====',
+      'The Hulk has limitless strength.',
+      '',
+      '== Reception ==',
+      'Good.',
+    ].join('\n');
+
+    // 冠詞の有無は問わない（小見出しは "The Hulk"、用語は "Hulk"）
+    expect(extractPowers(a, 'Hulk')).toBe('The Hulk has limitless strength.');
+    expect(extractPowers(a, 'Bruce Banner')).toBe('Bruce is considered one of the greatest minds.');
+  });
+
+  it('一致する小見出しが無ければ節全体に戻す', () => {
+    const a = [
+      '== Powers and abilities ==',
+      '',
+      '==== Bruce Banner ====',
+      'Bruce is considered one of the greatest minds.',
+      '',
+      '== Reception ==',
+      'Good.',
+    ].join('\n');
+    expect(extractPowers(a, 'Hulk')).toBe('Bruce is considered one of the greatest minds.');
+    // 小見出しが無い記事でも従来どおり
+    expect(extractPowers('== Powers and abilities ==\nZatanna speaks backwards.', 'Zatanna'))
+      .toBe('Zatanna speaks backwards.');
+  });
+
   it('能力節が無ければ空文字', () => {
     expect(extractPowers('== History ==\nnothing here')).toBe('');
   });

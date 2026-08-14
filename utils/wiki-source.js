@@ -95,7 +95,7 @@ export function extractIntro(extract) {
  * @param {string} extract
  * @returns {string} 能力節が無ければ空文字
  */
-export function extractPowers(extract) {
+export function extractPowers(extract, term = '') {
   if (typeof extract !== 'string' || extract === '') return '';
   const heads = listHeadings(extract);
   for (let i = 0; i < heads.length; i++) {
@@ -104,10 +104,36 @@ export function extractPowers(extract) {
     for (let j = i + 1; j < heads.length; j++) {
       if (heads[j].depth <= heads[i].depth) { end = heads[j].start; break; }
     }
+    const body = extract.slice(heads[i].end, end);
+    // 能力節が人格・形態ごとの小見出しに割れている記事がある（Hulk は
+    // === Bruce Banner === と === Hulk ===）。先頭から採ると Hulk の解説に
+    // Banner の「地球最高の頭脳」が出て、別人の説明になる
+    const sub = pickSubsectionFor(body, term);
     // 能力節の中の小見出し（==== Bruce Banner ==== 等）は本文ではないので落とす。
     // 残すと解説の先頭がマークアップになり、しかもそれを訳そうとして
     // 人名を崩す（実機: "==== ブーリス・バナー ====" ＝ Bruce の誤り）
-    return stripHeadings(extract.slice(heads[i].end, end));
+    return stripHeadings(sub !== '' ? sub : body);
+  }
+  return '';
+}
+
+/**
+ * 能力節の小見出しのうち、対象語と一致するものの本文を返す。
+ * 一致する小見出しが無ければ空文字（呼び出し側が節全体にフォールバックする）
+ */
+function pickSubsectionFor(body, term) {
+  // 小見出しは "Hulk" にも "The Hulk" にもなりうるので冠詞は無視して突き合わせる
+  const norm = (s) => normalizeTitleForMatch(s).replace(/^the /, '');
+  const t = norm(term);
+  if (t === '') return '';
+  const subs = listHeadings(body);
+  for (let i = 0; i < subs.length; i++) {
+    if (norm(subs[i].title) !== t) continue;
+    let end = body.length;
+    for (let j = i + 1; j < subs.length; j++) {
+      if (subs[j].depth <= subs[i].depth) { end = subs[j].start; break; }
+    }
+    return body.slice(subs[i].end, end);
   }
   return '';
 }
