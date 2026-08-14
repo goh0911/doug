@@ -2,6 +2,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   IDENTITY_MAX, POWERS_MAX, buildGlossPrompt, parseGlossResponse, truncateAtSentence, firstSentences,
+  firstSubstantiveSentence,
 } from '../../utils/gloss-summary.js';
 
 describe('buildGlossPrompt', () => {
@@ -216,5 +217,37 @@ describe('truncateAtSentence', () => {
 
   it('上限内に文末が無ければ空文字（文中で切らない・R-W16）', () => {
     expect(truncateAtSentence('あ'.repeat(100), 10)).toBe('');
+  });
+});
+
+describe('firstSubstantiveSentence', () => {
+  // en.wikipedia.org/wiki/Hulk の導入節（2026-08-14 時点）。
+  // 1 文目は出版社、2 文目は作者と初出号で、作中の情報は 3 文目まで出てこない
+  const HULK_INTRO = [
+    'The Hulk is a superhero appearing in American comic books published by Marvel Comics.',
+    'Created by writer Stan Lee and artist Jack Kirby, the character first appeared in the debut issue of The Incredible Hulk (May 1962).',
+    'In his comic book appearances, the character is both the Hulk, a green-skinned, hulking and muscular humanoid possessing a vast degree of physical strength, and his alter ego Bruce Banner, a physically weak, socially withdrawn, and emotionally reserved physicist.',
+  ].join(' ');
+
+  it('出版社・作者・初出号の文を飛ばして作中の説明を選ぶ', () => {
+    const got = firstSubstantiveSentence(HULK_INTRO);
+    expect(got).toContain('green-skinned');
+    expect(got).not.toContain('Marvel Comics');
+    expect(got).not.toContain('Stan Lee');
+  });
+
+  it('書誌情報が無ければ 1 文目をそのまま返す', () => {
+    const s = 'Nightcrawler is a mutant with the ability to teleport. He is a member of the X-Men.';
+    expect(firstSubstantiveSentence(s)).toBe('Nightcrawler is a mutant with the ability to teleport.');
+  });
+
+  it('全文が書誌情報なら 1 文目に戻す（何も出さないより良い）', () => {
+    const s = 'Foo is a character published by Marvel Comics. Created by someone, it first appeared in 1970.';
+    expect(firstSubstantiveSentence(s)).toBe('Foo is a character published by Marvel Comics.');
+  });
+
+  it('空入力は空文字', () => {
+    expect(firstSubstantiveSentence('')).toBe('');
+    expect(firstSubstantiveSentence(null)).toBe('');
   });
 });

@@ -35,9 +35,10 @@ function prepare(s, max) {
  */
 export function buildGlossPrompt({ term, intro, powers, langLabel = '日本語' } = {}) {
   const t = prepare(term, 80);
-  // 記事全文ではなく先頭の文だけを渡す。長い入力を要約させると人名の捏造が起きる
-  // （実機: Hulk の記事から「ロバート・ブーリス・バナー」＝ Bruce の誤り）
-  const i = prepare(firstSentences(intro, 1), INTRO_INPUT_MAX);
+  // 記事全文ではなく 1 文だけを渡す。長い入力を要約させると人名の捏造が起きる
+  // （実機: Hulk の記事から「ロバート・ブーリス・バナー」＝ Bruce の誤り）。
+  // ただし先頭固定にはしない。導入節の書き出しは出版社と作者の話で作中情報が無い
+  const i = prepare(firstSubstantiveSentence(intro), INTRO_INPUT_MAX);
   const p = prepare(firstSentences(powers, 2), POWERS_INPUT_MAX);
 
   return `[SYSTEM]
@@ -74,6 +75,34 @@ powers: ${p}
  * @param {number} n
  * @returns {string}
  */
+// 出版・創作に触れる文を見分ける。Wikipedia の導入節はこの種の文で始まるのが定型で、
+// 作中の情報が入っていない（実測: Hulk は 2 文目まで出版社と作者と初出号の話）
+const BIBLIOGRAPHIC = /\b(?:published by|created by|co-created|first appeared|debut(?:ed|s)?|appear(?:s|ed|ing) in (?:American )?comic books)\b/i;
+
+/** 導入節から拾う文の上限。これより先は定義から離れて逸話になる */
+const SUBSTANTIVE_SCAN_MAX = 5;
+
+/**
+ * 導入節のうち、作中の説明にあたる最初の文を返す。
+ *
+ * 1 文目をそのまま使うと「ハルクはマーベル・コミックが出版するアメコミに登場する
+ * スーパーヒーローである」となり、読者がいま読んでいる当の作品の書誌情報にしかならない。
+ * 出版・創作に触れる文を飛ばして最初の実質的な文を選ぶ。
+ * 全文が該当するなら 1 文目に戻す（何も出さないよりはまし）
+ */
+export function firstSubstantiveSentence(text) {
+  let rest = String(text ?? '').trim();
+  if (rest === '') return '';
+  const sentences = [];
+  for (let i = 0; i < SUBSTANTIVE_SCAN_MAX && rest !== ''; i++) {
+    const at = findSentenceEnd(rest);
+    if (at < 0) { sentences.push(rest); break; }
+    sentences.push(rest.slice(0, at + 1).trim());
+    rest = rest.slice(at + 1).trim();
+  }
+  return (sentences.find((s) => !BIBLIOGRAPHIC.test(s)) || sentences[0] || '').trim();
+}
+
 export function firstSentences(text, n = 1) {
   let rest = String(text ?? '').trim();
   if (rest === '') return '';
