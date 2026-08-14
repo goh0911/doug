@@ -493,13 +493,18 @@ export async function callTextOnlyProvider(prompt) {
         headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey },
         body: JSON.stringify({
           contents: [{ parts: [{ text: prompt }] }],
-          generationConfig: { temperature: 0, maxOutputTokens: 512 },
+          // 解説は identity 110 字 + powers 150 字の日本語 JSON で、本文だけで 512 をほぼ使い切る。
+          // 加えて Flash 系は thinking が既定 medium で、その分もこの上限と出力課金に乗る。
+          // 512 のままだと finishReason: MAX_TOKENS で candidates ごと欠けて解説が出ない
+          generationConfig: { temperature: 0, maxOutputTokens: 4096 },
         }),
         signal: controller.signal,
       }, 'Gemini');
       if (!res.ok) return null;
       const data = await res.json();
-      return data.candidates?.[0]?.content?.parts?.[0]?.text ?? null;
+      // 打ち切られると parts が欠けるか空文字になる。?? は空文字を素通りさせて
+      // 「失敗時は null」の契約を破るので || で倒す（OpenAI 側と対称）
+      return data.candidates?.[0]?.content?.parts?.[0]?.text || null;
     }
 
     if (provider === 'claude') {
@@ -514,14 +519,16 @@ export async function callTextOnlyProvider(prompt) {
         },
         body: JSON.stringify({
           model: settings.claudeModel || 'claude-sonnet-5',
-          max_tokens: 512,
+          // Claude は extended thinking がオプトインなので推論分は乗らないが、
+          // 日本語 260 字の JSON を返すには 512 では余裕が無い（Gemini/OpenAI と同じ理由）
+          max_tokens: 4096,
           messages: [{ role: 'user', content: [{ type: 'text', text: prompt }] }],
         }),
         signal: controller.signal,
       }, 'Claude');
       if (!res.ok) return null;
       const data = await res.json();
-      return data.content?.[0]?.text ?? null;
+      return data.content?.[0]?.text || null;
     }
 
     if (provider === 'openai') {
@@ -562,7 +569,10 @@ export async function callTextOnlyProvider(prompt) {
       }, 'Ollama');
       if (!res.ok) return null;
       const data = await res.json();
-      return data.message?.content ?? null;
+      // 画像翻訳側（:452）と同じく thinking も拾う。既定の qwen3.6 を含む thinking 対応モデルは
+      // 答えを message.thinking に入れて content を空文字で返すことがあり、
+      // content だけを見ていると解説が一度も取れない
+      return pickOllamaResponseText(data.message) || null;
     }
   } catch {
     return null;
