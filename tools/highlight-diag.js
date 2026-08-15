@@ -58,8 +58,11 @@
 
   async function dougHl(id) {
     const { key, s } = await pickSeries(id);
-    const g = s.glossary?.[LANG] || {};
-    const d = s.glossDefs?.[LANG] || {};
+    // 拡張の実経路（GET_PAGE_GLOSSARY / 解説のシリーズ横断参照）に合わせて差し替える。
+    // storage を直接読むだけだと自シリーズしか見えず、横断の効果を測れない
+    let g = s.glossary?.[LANG] || {};
+    let d = s.glossDefs?.[LANG] || {};
+    const ownGlossaryCount = Object.keys(g).length;
 
     const { text: pageText, count: overlayCount } = pageTextOf();
     console.group(`下線ファネル  ${s.meta?.name ?? '(名前なし)'}  ${key}`);
@@ -95,13 +98,70 @@
     console.log('----- 本文ここから -----\n' + pageText + '----- 本文ここまで -----');
 
     // --- 関門0: 訳語を持つ用語 ---
+    //
+    // 拡張が実際に使うのは「全シリーズを畳んだ用語集」（background の GET_PAGE_GLOSSARY）。
+    // 取れなければ自シリーズだけで続ける（拡張の縮退動作と同じ）
+    try {
+      const res = await chrome.runtime.sendMessage({
+        type: 'GET_PAGE_GLOSSARY', seriesId: key.slice(SERIES_PREFIX.length), targetLang: LANG,
+      });
+      if (res && res.langMap && Object.keys(res.langMap).length > 0) {
+        g = res.langMap;
+        const bySeries = {};
+        for (const e of Object.values(g)) {
+          const n = e.seriesName || e.seriesId || '(不明)';
+          bySeries[n] = (bySeries[n] || 0) + 1;
+        }
+        console.log(`用語集はシリーズ横断で ${Object.keys(g).length} 語`
+          + `（このシリーズ単体では ${ownGlossaryCount} 語）`, bySeries);
+      }
+    } catch { /* 旧版の拡張では未実装 */ }
+    if (g === s.glossary?.[LANG]) {
+      console.warn('★GET_PAGE_GLOSSARY が使えません。拡張が未リロードか古い版です'
+        + '（chrome://extensions/ で Doug を再読み込みしてください）。自シリーズのみで測ります');
+    }
+
+    // 解説キャッシュも横断参照になったので、他シリーズぶんを重ねて見る
+    // （自シリーズを優先、同点なら at が新しい方。background の buildDefsLookup と同じ規則）
+    {
+      const all = await chrome.storage.local.get(null);
+      const merged = {};
+      for (const k of Object.keys(all).filter((x) => x.startsWith(SERIES_PREFIX)).sort()) {
+        const map = all[k]?.glossDefs?.[LANG] || {};
+        const isCurrent = k === key;
+        for (const [t, e] of Object.entries(map)) {
+          if (!e || typeof e.at !== 'number') continue;
+          const prev = merged[t];
+          if (!prev || (isCurrent && !prev._cur) || (!prev._cur && e.at > prev.at)) {
+            merged[t] = { ...e, _cur: isCurrent };
+          }
+        }
+      }
+      const foreign = Object.keys(merged).length - Object.keys(d).length;
+      if (foreign > 0) console.log(`解説キャッシュは横断で ${Object.keys(merged).length} 件（他シリーズから +${foreign}）`);
+      d = merged;
+    }
+
     const terms = Object.keys(g).filter((k) => {
       const e = g[k];
       return e && typeof e.translated === 'string' && e.translated !== '';
     });
 
     // --- 関門1: 訳語が本文に現れるか（loadGlossDefs の visible と同じ判定）---
-    const visible = terms.filter((k) => pageText.includes(g[k].translated));
+    //
+    // 素の includes ではなく、拡張と同じカタカナ境界ガードを掛ける
+    // （utils/gloss-highlight.js の splitByTerms / findVisibleTerms）。
+    // includes だけだと「ロス」が「エマ・フロスト」に当たり、実際には下線にならない語を
+    // 「出ている」と数えてしまう
+    const KATA_RE = /[ァ-ヺーヽヾ]/;
+    const occursStandalone = (text, t) => {
+      if (!KATA_RE.test(t)) return text.includes(t);
+      for (let i = text.indexOf(t); i !== -1; i = text.indexOf(t, i + 1)) {
+        if (!KATA_RE.test(text[i - 1] || '') && !KATA_RE.test(text[i + t.length] || '')) return true;
+      }
+      return false;
+    };
+    const visible = terms.filter((k) => occursStandalone(pageText, g[k].translated));
 
     // --- 関門2: 解説の生成状態 ---
     const okDefs = visible.filter((k) => d[k] && !d[k].failed);
