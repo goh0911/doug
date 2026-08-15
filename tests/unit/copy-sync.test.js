@@ -41,6 +41,7 @@ function normalize(src) {
 // [関数名, モジュール側のパス, コピー側のパス]
 const COPIES = [
   ['splitByTerms', 'utils/gloss-highlight.js', 'content.js'],
+  ['findVisibleTerms', 'utils/gloss-highlight.js', 'content.js'],
 ];
 
 describe('content.js に置いた pure 関数のコピーが元と一致している', () => {

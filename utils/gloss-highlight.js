@@ -40,14 +40,42 @@ export function splitByTerms(text, terms) {
   const sorted = [...byMatch.keys()].sort((a, b) => b.length - a.length);
   const re = new RegExp(sorted.map(escapeRegExp).join('|'), 'g');
 
+  // カタカナ語が、より長いカタカナ語の内側に食い込むのを防ぐ。上の長い順の並べ替えで
+  // 防げるのは「用語集どうし」の包含だけで、用語集に無い語には無力だった
+  // （実測: ROSS の訳語「ロス」が「エマ・フロスト」に一致し、無関係な人物の解説が出た）。
+  // 中黒（U+30FB）はこの文字クラスに入らない。「エマ・フロスト」の「エマ」は正当な一致
+  const kata = /[ァ-ヺーヽヾ]/;
+
   const out = [];
   let last = 0;
   let m;
   while ((m = re.exec(text)) !== null) {
+    if (kata.test(m[0])
+      && (kata.test(text[m.index - 1] || '') || kata.test(text[m.index + m[0].length] || ''))) continue;
     if (m.index > last) out.push({ text: text.slice(last, m.index), key: null });
     out.push({ text: m[0], key: byMatch.get(m[0]) });
     last = m.index + m[0].length;
   }
   if (last < text.length) out.push({ text: text.slice(last), key: null });
   return out;
+}
+
+/**
+ * 訳文に実際に現れる用語の key を返す。
+ *
+ * 「どの語の解説を要求するか」は、必ず splitByTerms と同じ物差しで決める。素朴な
+ * includes で判定すると両者がずれ、下線にならないと確定している一致（より長い
+ * カタカナ語への食い込み）まで要求してしまう。表示されない解説の生成に
+ * Wikipedia 取得と API 課金だけが発生し、1 回 30 語の上限も食う。
+ *
+ * @param {string} text 訳文
+ * @param {Array<{match: string, key: string}>} terms
+ * @returns {Set<string>} 訳文に現れた用語の key
+ */
+export function findVisibleTerms(text, terms) {
+  const found = new Set();
+  for (const part of splitByTerms(text, terms)) {
+    if (part.key) found.add(part.key);
+  }
+  return found;
 }

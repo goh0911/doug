@@ -208,16 +208,34 @@
     const sorted = [...byMatch.keys()].sort((a, b) => b.length - a.length);
     const re = new RegExp(sorted.map(escapeRegExp).join('|'), 'g');
 
+    // カタカナ語が、より長いカタカナ語の内側に食い込むのを防ぐ。上の長い順の並べ替えで
+    // 防げるのは「用語集どうし」の包含だけで、用語集に無い語には無力だった
+    // （実測: ROSS の訳語「ロス」が「エマ・フロスト」に一致し、無関係な人物の解説が出た）。
+    // 中黒（U+30FB）はこの文字クラスに入らない。「エマ・フロスト」の「エマ」は正当な一致
+    const kata = /[ァ-ヺーヽヾ]/;
+
     const out = [];
     let last = 0;
     let m;
     while ((m = re.exec(text)) !== null) {
+      if (kata.test(m[0])
+        && (kata.test(text[m.index - 1] || '') || kata.test(text[m.index + m[0].length] || ''))) continue;
       if (m.index > last) out.push({ text: text.slice(last, m.index), key: null });
       out.push({ text: m[0], key: byMatch.get(m[0]) });
       last = m.index + m[0].length;
     }
     if (last < text.length) out.push({ text: text.slice(last), key: null });
     return out;
+  }
+
+  // utils/gloss-highlight.js のコピー。
+  // 変更したら utils/gloss-highlight.js も必ず同期すること。
+  function findVisibleTerms(text, terms) {
+    const found = new Set();
+    for (const part of splitByTerms(text, terms)) {
+      if (part.key) found.add(part.key);
+    }
+    return found;
   }
 
   // ============================================================
@@ -550,13 +568,20 @@
     // 5798ms / 並列 6 回 5846ms＝同じ）1 語あたり約 1.9 秒かかるので、これが
     // そのまま下線が出るまでの待ち時間になっていた。
     //
-    // 照合は buildGlossTermList と同じ entry.translated で行う。ここで落とした語は
-    // そもそも splitByTerms が拾わない＝下線にならないので、取りこぼしにはならない。
+    // 照合は splitByTerms 本体に任せる（findVisibleTerms）。以前は includes で
+    // 判定していたが、下線側にカタカナの食い込み防止を入れた時点で両者がずれ、
+    // 「要求されるが決して下線にならない語」が生まれる。その語の生成は
+    // Wikipedia 取得も API 課金も発生して表示には出ない、丸ごと無駄な支出になる。
+    // ここで落とした語は splitByTerms も拾わない＝下線にならないので取りこぼしは無い。
     // 出てこなかった語は次にそのページを開いたときに生成される。
     const pageText = renderedOverlayText();
-    const visible = pageText === ''
-      ? terms // オーバーレイ未描画（想定外）なら従来どおり全語
-      : terms.filter((k) => pageText.includes(langMap[k].translated));
+    let visible;
+    if (pageText === '') {
+      visible = terms; // オーバーレイ未描画（想定外）なら従来どおり全語
+    } else {
+      const found = findVisibleTerms(pageText, terms.map((k) => ({ match: langMap[k].translated, key: k })));
+      visible = terms.filter((k) => found.has(k));
+    }
     if (visible.length === 0) return;
 
     let response = null;
