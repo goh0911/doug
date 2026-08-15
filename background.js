@@ -20,6 +20,7 @@ import {
   getGlossDefs, putGlossDefs,
 } from './series-store.js';
 import { derivePathPrefix } from './utils/url-pattern.js';
+import { mergeGlossaries, mergeGlossDefs } from './utils/glossary-union.js';
 import { buildSeriesDetectionPrompt, parseSeriesDetectionResponse } from './utils/series-nano.js';
 import {
   WIKIPEDIA_ORIGIN, SOURCE_ID, buildSearchUrl, parseSearchResponse,
@@ -838,7 +839,36 @@ async function mapWithConcurrency(items, limit, worker) {
  * @param {boolean} nanoOnly true のとき先読み専用モード（Nano のみ・有料 API 不可）で生成する
  * @returns {Promise<object>} { 原語: { identity, powers, url } }。失敗語は含めない
  */
-async function resolveGlossDefs({ seriesId, seriesName, terms, targetLang, langLabel, nanoOnly = false, host = '', tabId = null }) {
+/**
+ * 全シリーズの用語集を畳んで返す（下線と解説要求の照合用）。
+ *
+ * 用語集はシリーズ単位で育つため、別の作品を開くと 0 語から始まる。実測（実ページ 3 枚）
+ * では本文の固有名詞 12 個中 4 個しか用語集に無く、しかもその 3 個は用語集と同じ作品の
+ * ページに出たものだった。マーベル世界の固有名詞は作品をまたいで共通なので読みは横断させる。
+ * 書き込み（抽出・承認）と層B置換はシリーズ単位のまま。
+ */
+async function buildPageGlossary(seriesId, targetLang) {
+  const all = await listSeries();
+  return mergeGlossaries(all.map((s) => ({
+    seriesId: s.seriesId,
+    seriesName: (s.meta && s.meta.name) || s.seriesId,
+    map: (s.glossary && s.glossary[targetLang]) || {},
+  })), seriesId);
+}
+
+/**
+ * 他シリーズを含む解説キャッシュの参照用ビュー。
+ * これを putGlossDefs に渡してはいけない（他シリーズの解説が現在のシリーズに複製される）。
+ */
+async function buildDefsLookup(seriesId, targetLang) {
+  const all = await listSeries();
+  return mergeGlossDefs(all.map((s) => ({
+    seriesId: s.seriesId,
+    map: (s.glossDefs && s.glossDefs[targetLang]) || {},
+  })), seriesId);
+}
+
+async function resolveGlossDefs({ seriesId, seriesName, terms, targetLang, langLabel, nanoOnly = false, host = '', tabId = null, homeNames = null }) {
   const lockKey = `${seriesId}:${targetLang}`;
   // 直前の実行が入れ替わる直前まで Map から見えるようにチェーンする。
   // await の後に別呼び出しが割り込んでも、同じ prev を待った全員が
@@ -849,10 +879,15 @@ async function resolveGlossDefs({ seriesId, seriesName, terms, targetLang, langL
     if (prev) await prev.catch(() => {}); // 直前の実行の失敗は無視して続行
     try {
       const now = Date.now();
-      const cached = await getGlossDefs(seriesId, targetLang);
+      // own は自シリーズぶん＝書き戻す対象。lookup は他シリーズを重ねた参照用ビューで、
+      // 同じ語を作品ごとに作り直さないために使う（取得と課金の重複を防ぐ）。失敗も
+      // 重ねるので、記事が無いと分かった語を作品ごとに 24 時間おきに引き直さない。
+      // lookup を保存に使わないこと（他シリーズの解説が現在のシリーズへ複製される）
+      const own = await getGlossDefs(seriesId, targetLang);
+      const lookup = { ...(await buildDefsLookup(seriesId, targetLang)), ...own };
       const sourcesKey = await glossSourcesKey({ primaryOnly: nanoOnly });
       const wanted = Array.isArray(terms) ? [...new Set(terms.filter((t) => typeof t === 'string' && t))] : [];
-      let missing = wanted.filter((t) => !isUsable(cached[t], now, sourcesKey));
+      let missing = wanted.filter((t) => !isUsable(lookup[t], now, sourcesKey));
 
       // 1 リクエストあたりの fetch/LLM 呼び出し回数に上限を設ける（レビュー Important 1）。
       // 超過分は今回は処理しない（黙って落とさず記録だけ残す）
@@ -885,11 +920,17 @@ async function resolveGlossDefs({ seriesId, seriesName, terms, targetLang, langL
           // （Codex 指摘）。sender.tab が取れない場合だけ保存済みホストに落とす
           const publisher = expectedPublisher(host || seriesHost(seriesExists));
           await mapWithConcurrency(missing, GLOSS_CONCURRENCY, async (term) => {
-            const entry = await buildGlossEntry(term, seriesName, langLabel, nanoOnly, publisher, sourcesKey)
+            // 語ごとに「その語を覚えた作品」の名前で引く。用語集を横断させた結果、
+            // 他作品由来の語をいま読んでいる作品名で検索すると seriesNameAttempts の
+            // 曖昧性解消が効かなくなる（TONY STARK を Immortal Hulk で引く等）
+            const homeName = (homeNames && typeof homeNames[term] === 'string' && homeNames[term])
+              ? homeNames[term] : seriesName;
+            const entry = await buildGlossEntry(term, homeName, langLabel, nanoOnly, publisher, sourcesKey)
               .catch(() => ({ failed: true, at: now, sources: sourcesKey }));
             if (entry === null) return;
-            cached[term] = entry;
-            const stored = await putGlossDefs(seriesId, targetLang, cached);
+            own[term] = entry;
+            lookup[term] = entry;
+            const stored = await putGlossDefs(seriesId, targetLang, own);
             if (!stored) {
               // 直前の存在確認から書き込みまでの間に series が削除された等のレース。戻り値を捨てず記録する
               console.debug('[gloss] putGlossDefs failed after existence check (race?):', seriesId, targetLang);
@@ -913,7 +954,7 @@ async function resolveGlossDefs({ seriesId, seriesName, terms, targetLang, langL
       // 表示可能なものだけ返す（失敗エントリは content.js に渡さない）
       const out = {};
       for (const term of wanted) {
-        const e = cached[term];
+        const e = lookup[term];
         if (!e || e.failed === true) continue;
         // source を落とさない。落とすと content.js 側が出典ホスト名とラベルを
         // 直書きするしかなくなり、設計書 §3 の「ソースを 1 つ足すだけ」が成り立たない
@@ -1255,6 +1296,19 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       return;
     }
 
+    // 下線と解説要求の照合に使う「全シリーズを畳んだ用語集」。
+    // GET_SERIES とは別にする。あちらは series.html の管理 UI が使っており、他作品の語が
+    // 編集対象として並ぶと削除・承認の対象がどのシリーズのものか分からなくなる
+    if (message.type === 'GET_PAGE_GLOSSARY') {
+      if (!message.seriesId || !message.targetLang) { sendResponse({ langMap: {} }); return; }
+      try {
+        sendResponse({ langMap: await buildPageGlossary(message.seriesId, message.targetLang) });
+      } catch {
+        sendResponse({ langMap: {} });
+      }
+      return;
+    }
+
     if (message.type === 'GET_GLOSS_DEFS') {
       // 不正なメッセージ（seriesId/targetLang 欠落）は fetch/LLM バッチを始める前に弾く（レビュー Important 2）
       if (!message.seriesId || !message.targetLang) { sendResponse({ defs: {} }); return; }
@@ -1271,6 +1325,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           nanoOnly: false,
           host: hostOf(sender.tab && sender.tab.url),
           tabId: (sender.tab && sender.tab.id) ?? null,
+          homeNames: message.homeNames && typeof message.homeNames === 'object' ? message.homeNames : null,
         });
         sendResponse({ defs });
       } catch {

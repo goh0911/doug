@@ -536,7 +536,19 @@
     const { glossEnabled = false } = await chrome.storage.local.get('glossEnabled');
     if (!glossEnabled) return;
 
-    const langMap = (series.glossary && series.glossary[targetLang]) || {};
+    // 照合には「全シリーズを畳んだ用語集」を使う（background の GET_PAGE_GLOSSARY）。
+    // 用語集はシリーズ単位で育つため、別の作品を開くと 0 語から始まり下線がほとんど
+    // 出なかった。実測（実ページ 3 枚）で本文の固有名詞 12 個中 4 個しか収録されておらず、
+    // うち 3 個は用語集と同じ作品のページのものだった。
+    // 取れなければ自シリーズだけで続ける（機能が消えるより狭くても動くほうがよい）
+    let langMap = null;
+    try {
+      const res = await chrome.runtime.sendMessage({
+        type: 'GET_PAGE_GLOSSARY', seriesId: series.seriesId, targetLang,
+      });
+      if (res && res.langMap && Object.keys(res.langMap).length > 0) langMap = res.langMap;
+    } catch { /* 失敗は表示しない */ }
+    if (langMap === null) langMap = (series.glossary && series.glossary[targetLang]) || {};
     // 解説ポップアップは未承認候補（Nano 自動抽出の approved:false）も対象にする。
     // 層B置換（utils/glossary-substitute.js）が approved を要求するのは訳文を書き換えるためで、
     // 解説は誤った語なら background 側の検証ゲートで落ちて何も表示されない。危険度が違う。
@@ -544,7 +556,8 @@
     //
     // 【課金の上界】この経路は先読みと違い nanoOnly:false で、Nano が使えない環境では
     // 未承認語でも翻訳用 API が呼ばれる（approved がかつて担っていた歯止めが外れる）。
-    // 上界は「シリーズの glossary 登録語の異なり数 × 1 回」:
+    // 上界は「**全シリーズ**の glossary 登録語の異なり数 × 1 回」（用語集を横断させたため、
+    // 以前の「1 シリーズぶん」から広がっている）:
     //   - glossEnabled が既定 false、かつ en.wikipedia.org の権限許可が要る
     //   - Wikipedia 取得と検証ゲートが先で、素材が取れない語は API に到達しない
     //   - 下の buildGlossTermList で 1 回の要求は 30 語に上限化
@@ -593,6 +606,11 @@
         terms: visible,
         targetLang,
         langLabel: LANG_LABELS[targetLang] || '日本語',
+        // 他作品由来の語は、その語を覚えた作品名で Wikipedia を引かせる
+        homeNames: Object.fromEntries(
+          visible.filter((k) => typeof langMap[k].seriesName === 'string' && langMap[k].seriesName)
+            .map((k) => [k, langMap[k].seriesName])
+        ),
       });
     } catch {
       return; // 失敗は表示しない（設計書 §10）
