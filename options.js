@@ -132,7 +132,18 @@ async function checkOllamaStatus() {
     if (res.status === 403) {
       statusEl.textContent = '⚠ Ollama のアクセス拒否 (403) — OLLAMA_ORIGINS の設定が必要です';
       statusEl.className = 'ollama-status err';
-      downloadHint.innerHTML = 'ターミナルで実行して Ollama を再起動:<br><code>launchctl setenv OLLAMA_ORIGINS "*"</code>';
+      // 値を "*" にすると閲覧中の任意のウェブページからローカルの Ollama を叩けてしまう。
+      // 拡張機能のオリジンだけに絞る（Ollama の既定は 127.0.0.1 / 0.0.0.0 のみ）。
+      // innerHTML は使わない（R-SEC-2）
+      const cmd = document.createElement('code');
+      cmd.textContent = 'launchctl setenv OLLAMA_ORIGINS "chrome-extension://*"';
+      const note = document.createElement('div');
+      note.className = 'field-hint';
+      note.textContent = '※ Mac を再起動するとこの設定は消えます（再設定が必要）';
+      downloadHint.replaceChildren(
+        document.createTextNode('ターミナルで実行して Ollama を再起動:'),
+        document.createElement('br'), cmd, note,
+      );
       downloadHint.style.display = '';
       return;
     }

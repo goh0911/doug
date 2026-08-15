@@ -438,7 +438,10 @@ async function translateImageWithOllama(endpoint, model, imageData, prompt, imag
   if (!res.ok) {
     const errBody = await res.text().catch(() => '');
     if (res.status === 403) {
-      throw new Error('Ollama のアクセスが拒否されました (403)。ターミナルで「launchctl setenv OLLAMA_ORIGINS "*"」を実行して Ollama を再起動してください。');
+      // "*" を勧めない。閲覧中の任意のウェブページからローカルの Ollama を叩けてしまう
+      throw new Error('Ollama のアクセスが拒否されました (403)。ターミナルで'
+        + '「launchctl setenv OLLAMA_ORIGINS "chrome-extension://*"」を実行して'
+        + ' Ollama を再起動してください（Mac の再起動でこの設定は消えます）。');
     }
     if (res.status === 404) {
       throw new Error(`モデル "${model}" がインストールされていません。設定画面でインストールしてください。`);
