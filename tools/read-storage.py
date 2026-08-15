@@ -121,11 +121,56 @@ def read_sst(path):
 
 
 def read_log(path):
-    """write-ahead log。非圧縮なので JSON をそのまま拾う（厳密なパースはしない）"""
+    """write-ahead log を読む。
+
+    .ldb は「確定済み」の内容しか持たない。直近の書き込みは .log にしか無いため、
+    ここを読まないと「さっき生成された解説が見えない」状態になる（実際に誤読しかけた）。
+
+    形式: 32KB ブロックに record を詰める。record = crc(4) + len(2) + type(1) + data。
+    type は 1=FULL 2=FIRST 3=MIDDLE 4=LAST で、断片は連結してから解釈する。
+    連結後は WriteBatch = seq(8) + count(4) + [kind(1) + key + (value)]…。
+    kind は 1=put 0=delete で、key/value はいずれも varint 長 + 本体。
+    """
+    BLOCK = 32768
     raw = path.read_bytes()
+    batches, pending = [], b''
+    for base in range(0, len(raw), BLOCK):
+        block = raw[base:base + BLOCK]
+        pos = 0
+        while pos + 7 <= len(block):
+            length = int.from_bytes(block[pos + 4:pos + 6], 'little')
+            rtype = block[pos + 6]
+            body = block[pos + 7:pos + 7 + length]
+            if rtype == 0 or len(body) < length:
+                break                      # 0 埋めの余白
+            pos += 7 + length
+            if rtype == 1:
+                batches.append(body)
+            elif rtype == 2:
+                pending = body
+            elif rtype == 3:
+                pending += body
+            elif rtype == 4:
+                batches.append(pending + body); pending = b''
+
     out = {}
-    for m in __import__('re').finditer(rb'series:[0-9a-f]{8,}', raw):
-        out[m.group().decode()] = None
+    for b in batches:
+        if len(b) < 12:
+            continue
+        count = int.from_bytes(b[8:12], 'little')
+        p = 12
+        try:
+            for _ in range(count):
+                kind = b[p]; p += 1
+                klen, p = varint(b, p)
+                key = b[p:p + klen]; p += klen
+                if kind == 1:                     # put
+                    vlen, p = varint(b, p)
+                    out[key.decode('utf-8', 'replace')] = b[p:p + vlen]; p += vlen
+                else:                             # delete
+                    out.pop(key.decode('utf-8', 'replace'), None)
+        except (IndexError, ValueError):
+            continue                              # 途中で切れた batch は捨てる
     return out
 
 
@@ -135,6 +180,14 @@ for f in sorted(d.glob('*.ldb')):
     for key, val in read_sst(f):
         k = key[:-8].decode('utf-8', 'replace')   # 末尾 8B は seq+type
         records[k] = val
+# .log は .ldb より新しい。後から重ねて上書きする
+log_hits = 0
+for f in sorted(d.glob('*.log')):
+    for k, v in read_log(f).items():
+        records[k] = v
+        log_hits += 1
+if log_hits:
+    print(f'（.log から {log_hits} 件を反映。.ldb だけだと直近の書き込みを見落とす）')
 
 print(f'キー {len(records)} 件: {sorted(records)[:20]}\n')
 for k in sorted(records):
