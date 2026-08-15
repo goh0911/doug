@@ -67,6 +67,25 @@
     const { text: pageText, count: overlayCount } = pageTextOf();
     console.group(`下線ファネル  ${s.meta?.name ?? '(名前なし)'}  ${key}`);
 
+    // このページが実際にどのシリーズ配下かを urlPatterns から突き止める。
+    // pickSeries は「用語集が最大のシリーズ」を選ぶので、別作品を読んでいると
+    // 表示中のシリーズ名と実際の所属がずれ、横断の効果を取り違える
+    try {
+      const all = await chrome.storage.local.get(null);
+      const here = location.origin + location.pathname;
+      const owners = Object.keys(all)
+        .filter((k) => k.startsWith(SERIES_PREFIX))
+        .filter((k) => (all[k]?.urlPatterns || []).some((p) =>
+          p && typeof p.origin === 'string' && here.startsWith(p.origin)
+          && (!p.pathPrefix || here.startsWith(p.pathPrefix))))
+        .map((k) => `${all[k]?.meta?.name ?? '(名前なし)'}[${k}] 用語集 ${Object.keys(all[k]?.glossary?.[LANG] || {}).length} 語`);
+      console.log('このページの URL に一致するシリーズ:', owners.length ? owners : '(該当なし)');
+      if (owners.length && !owners[0].includes(key)) {
+        console.warn(`★表示中の ${key} はこのページの所属シリーズではありません。`
+          + ` 上の一致シリーズの id を dougHl('series:xxx') に渡すと、実際の条件で測れます`);
+      }
+    } catch { /* 取れなくても続行 */ }
+
     if (overlayCount === 0) {
       console.warn('オーバーレイが 0 個です。先にページを翻訳してから実行してください。');
       console.groupEnd();
