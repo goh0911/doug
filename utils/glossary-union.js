@@ -26,13 +26,21 @@ function stableSources(sources) {
 }
 
 /**
- * 勝ち負けを決める。いま読んでいるシリーズが最優先、次に新しいもの。
+ * 勝ち負けを決める。成功 → いま読んでいるシリーズ → 新しいもの、の順に見る。
+ *
+ * 成功をシリーズより先に見るのが要点。自シリーズ優先を無条件にすると、
+ * 「自シリーズでは失敗・他シリーズでは成功」の語で失敗が勝ち、既に良い解説が
+ * あるのにポップアップが出ない（しかも失敗として再試行も抑制される）。
+ *
  * @param {object} prev 採用中
  * @param {object} next 候補
  * @param {string} currentSeriesId
  * @param {string} stampField 新しさを比べるフィールド（用語集は addedAt、解説は at）
  */
 function beats(prev, next, currentSeriesId, stampField) {
+  const prevFailed = prev.failed === true;
+  const nextFailed = next.failed === true;
+  if (prevFailed !== nextFailed) return prevFailed; // 成功が勝つ
   const prevCurrent = prev.seriesId === currentSeriesId;
   const nextCurrent = next.seriesId === currentSeriesId;
   if (prevCurrent !== nextCurrent) return nextCurrent;

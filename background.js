@@ -883,8 +883,11 @@ async function resolveGlossDefs({ seriesId, seriesName, terms, targetLang, langL
       // 同じ語を作品ごとに作り直さないために使う（取得と課金の重複を防ぐ）。失敗も
       // 重ねるので、記事が無いと分かった語を作品ごとに 24 時間おきに引き直さない。
       // lookup を保存に使わないこと（他シリーズの解説が現在のシリーズへ複製される）
+      // buildDefsLookup は自シリーズも含めて畳む（成功 → 自シリーズ → 新しい順）。
+      // ここで own を上書きスプレッドしてはいけない。自シリーズの失敗が他シリーズの
+      // 成功に勝ってしまい、良い解説があるのに出なくなる
       const own = await getGlossDefs(seriesId, targetLang);
-      const lookup = { ...(await buildDefsLookup(seriesId, targetLang)), ...own };
+      const lookup = await buildDefsLookup(seriesId, targetLang);
       const sourcesKey = await glossSourcesKey({ primaryOnly: nanoOnly });
       const wanted = Array.isArray(terms) ? [...new Set(terms.filter((t) => typeof t === 'string' && t))] : [];
       let missing = wanted.filter((t) => !isUsable(lookup[t], now, sourcesKey));

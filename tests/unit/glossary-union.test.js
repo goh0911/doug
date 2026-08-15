@@ -101,6 +101,25 @@ describe('mergeGlossDefs', () => {
     expect(r['SHOCK ROXX RADIO'].sources).toBe('4:en-wikipedia');
   });
 
+  // 自シリーズ優先を無条件にすると、「自シリーズでは失敗・他シリーズでは成功」の語で
+  // 失敗が勝ち、良い解説があるのにポップアップが出なくなる。成功を先に見る
+  it('成功は失敗より優先される（シリーズより先に見る）', () => {
+    const r = mergeGlossDefs([
+      { seriesId: 'hulk', map: { DOOM: { failed: true, at: 999 } } },      // 自シリーズ・新しい失敗
+      { seriesId: 'cw', map: { DOOM: def('ドゥームは…', 1) } },            // 他シリーズ・古い成功
+    ], CUR);
+    expect(r.DOOM.identity).toBe('ドゥームは…');
+    expect(r.DOOM.failed).toBeUndefined();
+  });
+
+  it('どちらも失敗なら従来どおり自シリーズが勝つ', () => {
+    const r = mergeGlossDefs([
+      { seriesId: 'hulk', map: { X: { failed: true, at: 1, sources: '4:own' } } },
+      { seriesId: 'cw', map: { X: { failed: true, at: 999, sources: '4:foreign' } } },
+    ], CUR);
+    expect(r.X.sources).toBe('4:own');
+  });
+
   it('at を持たないエントリは無視する（isUsable が判定できないため）', () => {
     const r = mergeGlossDefs([{ seriesId: 'a', map: { X: { identity: 'あ' } } }], CUR);
     expect(r).toEqual({});
