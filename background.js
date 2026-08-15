@@ -696,12 +696,18 @@ const GLOSS_SOURCES = [wikipediaSource, comicVineSource];
 
 /**
  * 解説パイプラインの世代。検証ゲート・プロンプト・素材の取り方を変えたら手で上げる。
- * 上げると既存の失敗キャッシュが失効し、次のホバーで引き直される。
+ * 上げると既存のキャッシュが失効し、次にその語がページに出たときに作り直される。
  * ソース構成が変わらない改修（passesGate の緩和など）を実機に届かせる唯一の手段。
  */
 // 2: 敬称・階級の略記を正式表記として扱うようにした（DOC DOOM → Doctor Doom）
 // 3: Comic Vine の HTTP 420 を一時的失敗として扱う（それ以前は失敗として焼き付いていた）
-const GLOSS_PIPELINE_EPOCH = 3;
+// 4: 素材の取り方を 2 つ直した。導入節から書誌情報の文を飛ばす（それまでは
+//    「マーベルが出版するアメコミに登場する」が解説になっていた）／能力節が人格ごとに
+//    割れている記事は対象語の小見出しだけを使う（Hulk の解説に Bruce Banner の
+//    「地球最高の頭脳」が出ていた）。あわせて成功エントリにも指紋を持たせ、
+//    epoch を上げれば成功分も作り直されるようにした（それまでは失敗分だけが失効し、
+//    成功は無期限に居座っていた）
+const GLOSS_PIPELINE_EPOCH = 4;
 
 /**
  * いま実際に引けるソースの id（権限があり、必要な設定も済んでいるもの）
@@ -807,6 +813,9 @@ async function buildGlossEntry(term, seriesName, langLabel, nanoOnly = false, pu
     url: material.url,
     source: material.sourceId,
     at: now,
+    // 失敗エントリと同じ指紋を成功にも持たせる。これが無いと成功は無期限に居座り、
+    // GLOSS_PIPELINE_EPOCH を上げてもプロンプトの改善が既存の解説へ届かない
+    sources: sourcesKey,
   };
 }
 

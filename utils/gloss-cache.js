@@ -21,21 +21,41 @@ function byteLength(value) {
  * 「直っていない」と誤診することになる（実測: Comic Vine を追加した直後、
  * その前に焼き付いた失敗エントリのせいで新ソースが一度も呼ばれなかった）。
  *
+ * 指紋の照合は成功エントリにも効かせる。成功は TTL を持たず無期限に残るため、
+ * プロンプトや素材の取り方を直しても既存の解説が居座り、改善が実機に永久に
+ * 届かなかった（実測: 用語集 156 語・解説 38 件のうち成功 36 件が、
+ * 手でキャッシュを消さない限り古い文面のままだった）。
+ *
  * @param {object} entry
  * @param {number} now
- * @param {string} [sourcesKey] 現在のソース構成の指紋。省略時は構成を見ない（旧挙動）
+ * @param {string} [sourcesKey] 現在のソース構成とパイプライン世代の指紋。
+ *   省略時は指紋を見ない（旧挙動）
  * @returns {boolean}
  */
 export function isUsable(entry, now, sourcesKey) {
   if (!entry || typeof entry !== 'object') return false;
   if (typeof entry.at !== 'number') return false;
+
   if (entry.failed === true) {
-    // 指紋が変わった（＝当時と今で引ける先が違う）失敗は無効。指紋を持たない
-    // 旧エントリも、いつの構成で失敗したか分からない以上は無効として引き直す
+    // 失敗は「どの構成で引けなかったか」なので、ソースが増えたら引き直す。指紋を
+    // 持たない旧エントリも、いつの構成で失敗したか分からない以上は引き直す
     if (typeof sourcesKey === 'string' && entry.sources !== sourcesKey) return false;
     return now - entry.at < FAILED_TTL_MS;
   }
+
+  // 成功は「どの作り方で作ったか」だけを見る。ソース構成まで一致を求めると、
+  // 先読み（primaryOnly: en-wikipedia のみ）で作った解説が通常経路
+  // （en-wikipedia+comicvine）で毎回作り直される。Wikipedia だけで作れた解説は
+  // Comic Vine が増えても有効なので、世代（epoch）が同じなら使ってよい
+  if (typeof sourcesKey === 'string' && epochOf(entry.sources) !== epochOf(sourcesKey)) return false;
   return typeof entry.identity === 'string' || typeof entry.powers === 'string';
+}
+
+/** 指紋 `${epoch}:${sourceIds}` から世代だけを取り出す。指紋が無ければ null */
+function epochOf(key) {
+  if (typeof key !== 'string' || key === '') return null;
+  const at = key.indexOf(':');
+  return at === -1 ? null : key.slice(0, at);
 }
 
 /**

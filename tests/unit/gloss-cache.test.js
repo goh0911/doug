@@ -64,8 +64,36 @@ describe('isUsable — ソース構成の指紋', () => {
     expect(isUsable(failedWith(WIKI, NOW - FAILED_TTL_MS - 1), NOW, WIKI)).toBe(false);
   });
 
-  it('成功エントリは指紋の影響を受けない', () => {
-    expect(isUsable(ok(NOW - FAILED_TTL_MS * 100), NOW, BOTH)).toBe(true);
+  // 以前は成功エントリだけ指紋を見ていなかった。成功は TTL を持たず無期限に残るため、
+  // プロンプトや素材の取り方を直しても既存の解説が居座り、改善が実機に永久に届かない
+  // （実測: 解説 38 件のうち成功 36 件が、手でキャッシュを消さない限り古い文面のまま）
+  const okWith = (sources, at = NOW) => ({ ...ok(at), sources });
+
+  it('指紋が一致する成功はそのまま使える（期限切れしない）', () => {
+    expect(isUsable(okWith(BOTH, NOW - FAILED_TTL_MS * 100), NOW, BOTH)).toBe(true);
+  });
+
+  // 成功は「どの作り方で作ったか」だけを見る。ソース構成まで一致を求めると、先読み
+  // （primaryOnly: Wikipedia のみ）で作った解説が通常経路で毎回作り直されてしまう
+  it('世代が同じならソース構成が違う成功も使える（先読み分を作り直さない）', () => {
+    expect(isUsable(okWith(WIKI), NOW, BOTH)).toBe(true);
+    expect(isUsable(okWith(BOTH), NOW, WIKI)).toBe(true);
+  });
+
+  it('失敗はソース構成まで見る（増えた先で引き直したいため）', () => {
+    expect(isUsable(failedWith(WIKI, NOW - 1000), NOW, BOTH)).toBe(false);
+  });
+
+  it('世代（epoch）が変わった成功は無効。プロンプト改善を既存の解説へ届ける経路', () => {
+    expect(isUsable(okWith('1:en-wikipedia+comicvine'), NOW, BOTH)).toBe(false);
+  });
+
+  it('指紋を持たない旧い成功エントリは無効（いつの作り方か分からないため作り直す）', () => {
+    expect(isUsable(ok(NOW - 1000), NOW, BOTH)).toBe(false);
+  });
+
+  it('指紋を渡さなければ成功は従来どおり無期限に有効', () => {
+    expect(isUsable(ok(NOW - FAILED_TTL_MS * 100), NOW)).toBe(true);
   });
 });
 
