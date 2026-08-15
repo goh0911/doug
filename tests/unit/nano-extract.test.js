@@ -283,6 +283,42 @@ describe('一般名詞の誤抽出を弾く（実機で MENTOR→恩師 が登�
   });
 });
 
+// 実機（Immortal Hulk 2018）で ROXXON と Roxxon が別エントリとして登録され、同じ
+// 「ロクソン」の解説を二重に生成していた。下線は片方しか出ないので、もう片方の
+// Wikipedia 取得と API 課金は丸ごと無駄になる
+describe('mergeCandidates - 大文字小文字だけ違う原語', () => {
+  const entry = (translated) => ({
+    translated, approved: false, count: 0, addedAt: 1, source: 'nano-extract',
+  });
+
+  it('既存と大文字小文字だけ違う候補は新規追加しない', () => {
+    const r = mergeCandidates({ ROXXON: entry('ロクソン') }, [{ original: 'Roxxon', translated: 'ロクソン' }]);
+    expect(Object.keys(r.glossaryLangMap)).toEqual(['ROXXON']);
+    expect(r.added).toBe(0);
+  });
+
+  it('訳が違えば既存キー側に訳ゆれとして記録する（新キーを作らない）', () => {
+    const r = mergeCandidates({ ROXXON: entry('ロクソン') }, [{ original: 'Roxxon', translated: 'ロクゾン' }]);
+    expect(Object.keys(r.glossaryLangMap)).toEqual(['ROXXON']);
+    expect(r.glossaryLangMap.ROXXON.inconsistent).toBe(true);
+    expect(r.glossaryLangMap.ROXXON.variants).toEqual(['ロクソン', 'ロクゾン']);
+    expect(r.glossaryLangMap.ROXXON.translated).toBe('ロクソン'); // 既存訳は動かさない
+  });
+
+  it('承認済みの既存語も大文字小文字違いで上書きしない', () => {
+    const approved = { ROXXON: { ...entry('ロクソン'), approved: true } };
+    const r = mergeCandidates(approved, [{ original: 'roxxon', translated: 'ロクソン' }]);
+    expect(Object.keys(r.glossaryLangMap)).toEqual(['ROXXON']);
+    expect(r.glossaryLangMap.ROXXON.approved).toBe(true);
+  });
+
+  it('別語は従来どおり追加される', () => {
+    const r = mergeCandidates({ ROXXON: entry('ロクソン') }, [{ original: 'HULK', translated: 'ハルク' }]);
+    expect(Object.keys(r.glossaryLangMap).sort()).toEqual(['HULK', 'ROXXON']);
+    expect(r.added).toBe(1);
+  });
+});
+
 describe('mergeCandidates', () => {
   it('新規候補を追加する', () => {
     const { glossaryLangMap, added } = mergeCandidates({}, [{ original: 'Hulk', translated: 'ハルク' }]);

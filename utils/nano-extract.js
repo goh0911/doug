@@ -208,13 +208,20 @@ export function mergeCandidates(glossaryLangMap, candidates, rejectedOriginals =
     //
     // 副次的に検出範囲が広がる。Nano 版は 1 バッチ 10 ペア内でしか気づけなかったが、
     // 用語集と突き合わせるこの方式は巻をまたいだ全履歴が対象になる。
-    const exist = next[c.original];
+    // 大文字小文字だけ違う既存語は同じ語とみなす。実測（Immortal Hulk 2018）で
+    // ROXXON と Roxxon が別エントリになり、同じ「ロクソン」の解説を二重に生成して
+    // いた。下線になるのは片方だけなので、もう片方の Wikipedia 取得と API 課金は
+    // 丸ごと無駄になる
+    const existKey = next[c.original] !== undefined
+      ? c.original
+      : Object.keys(next).find((k) => k.toLowerCase() === c.original.toLowerCase());
+    const exist = existKey === undefined ? undefined : next[existKey];
     if (exist) {
       if (exist.translated !== c.translated) {
         const variants = [...new Set([...(exist.variants ?? [exist.translated]), c.translated])];
         // translated は最初に採用した訳のまま動かさない。ユーザーが承認済みの訳を
         // 後から来た候補で塗り替えてはいけない
-        next[c.original] = { ...exist, variants, inconsistent: true };
+        next[existKey] = { ...exist, variants, inconsistent: true };
       }
       continue; // 既存（approved/pending）の translated 自体は触らない
     }
