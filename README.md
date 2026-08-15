@@ -138,7 +138,7 @@ doug/
 ## テスト
 
 ```bash
-npm run test:unit        # 単体テスト（715 件・高速）
+npm run test:unit        # 単体テスト（751 件・高速）
 npm run test:e2e         # E2E テスト（要: Chrome を閉じた状態で実行）
 ```
 
