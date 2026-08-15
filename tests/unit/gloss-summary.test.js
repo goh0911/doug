@@ -215,8 +215,23 @@ describe('truncateAtSentence', () => {
     expect(truncateAtSentence('やった！つぎの文。', 5)).toBe('やった！');
   });
 
-  it('上限内に文末が無ければ空文字（文中で切らない・R-W16）', () => {
+  // 上限内に文末が無いとき、以前は無条件で空文字を返していた。解説が丸ごと消えたうえ
+  // 失敗として 24 時間キャッシュされる。実測: 実機の HULK の identity は 106 字で
+  // 上限 110 に対し余裕が 4 字しかなく、訳が少し伸びれば消えていた
+  it('上限内に文末が無くても、読点まで残せるなら省略記号を付けて返す', () => {
+    const long = 'あ'.repeat(60) + '、' + 'い'.repeat(60) + '。';
+    const r = truncateAtSentence(long, 100);
+    expect(r).not.toBe('');
+    expect(r.endsWith('…')).toBe(true);
+    expect(r.length).toBeLessThanOrEqual(100 + 1); // 省略記号のぶんだけ超える
+  });
+
+  it('読点が無ければ従来どおり空文字（文中では切らない・R-W16）', () => {
     expect(truncateAtSentence('あ'.repeat(100), 10)).toBe('');
+  });
+
+  it('読点が先頭寄りで半分も残らないなら空文字（切れ端を出さない）', () => {
+    expect(truncateAtSentence('あ、' + 'い'.repeat(100), 40)).toBe('');
   });
 });
 
@@ -234,6 +249,19 @@ describe('firstSubstantiveSentence', () => {
     expect(got).toContain('green-skinned');
     expect(got).not.toContain('Marvel Comics');
     expect(got).not.toContain('Stan Lee');
+  });
+
+  // 実測: published by だけを見ていた頃、Thor の解説が「Thorが登場するコミック本は、
+  // 複数の巻にわたって出版されてきた」になっていた（en.wikipedia.org/wiki/Thor_(Marvel_Comics)）
+  it('published by 以外の出版表現も飛ばす（published across）', () => {
+    const intro = [
+      'Thor Odinson is a superhero appearing in American comic books published by Marvel Comics.',
+      'Created by artist Jack Kirby, writer Stan Lee, and scripter Larry Lieber, the character first appeared in Journey into Mystery #83.',
+      'Comic books featuring Thor have been published across several volumes.',
+      'Thor is one of the gods of Asgard and the son of the Asgardian king Odin.',
+    ].join(' ');
+    expect(firstSubstantiveSentence(intro))
+      .toBe('Thor is one of the gods of Asgard and the son of the Asgardian king Odin.');
   });
 
   it('書誌情報が無ければ 1 文目をそのまま返す', () => {

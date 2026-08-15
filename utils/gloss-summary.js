@@ -18,6 +18,9 @@ const POWERS_INPUT_MAX = 1500;
 /** 文末とみなす記号のうち、略語と紛れないもの（半角ピリオドは別扱い） */
 const UNAMBIGUOUS_SENTENCE_END = ['。', '．', '！', '？', '!', '?'];
 
+/** 文末が無いときの次善の切れ目。読点・中黒的な区切りまで（truncateAtSentence の最後の砦） */
+const MID_SENTENCE_BREAK = ['、', '，', '；', ';', '）', ')'];
+
 /** フィールドの最小文字数（R-W13）。極端に短い抽出結果はポップアップを出さない */
 const FIELD_MIN_LENGTH = 2;
 
@@ -76,8 +79,13 @@ powers: ${p}
  * @returns {string}
  */
 // 出版・創作に触れる文を見分ける。Wikipedia の導入節はこの種の文で始まるのが定型で、
-// 作中の情報が入っていない（実測: Hulk は 2 文目まで出版社と作者と初出号の話）
-const BIBLIOGRAPHIC = /\b(?:published by|created by|co-created|first appeared|debut(?:ed|s)?|appear(?:s|ed|ing) in (?:American )?comic books)\b/i;
+// 作中の情報が入っていない（実測: Hulk は 2 文目まで出版社と作者と初出号の話）。
+//
+// published は by で限定しない。Thor の記事は 3 文目が "Comic books featuring Thor have
+// been published across several volumes." で、published by だけを見ていた頃はこれが
+// 解説になっていた（作中の説明は次の「アスガルドの神の一柱でオーディンの息子」から）。
+// 作中の記述に published が現れることはまず無いので、語単体で落として差し支えない
+const BIBLIOGRAPHIC = /\b(?:published|created by|co-created|first appeared|debut(?:ed|s)?|appear(?:s|ed|ing) in (?:American )?comic books)\b/i;
 
 /** 導入節から拾う文の上限。これより先は定義から離れて逸話になる */
 const SUBSTANTIVE_SCAN_MAX = 5;
@@ -162,7 +170,19 @@ export function truncateAtSentence(text, max) {
     }
     idx = at;
   }
-  return idx >= 0 ? head.slice(0, idx + 1) : '';
+  if (idx >= 0) return head.slice(0, idx + 1);
+
+  // 文末が見つからない＝1 文が上限を超えている。ここで空文字を返すと解説が丸ごと
+  // 消え、しかも失敗として 24 時間キャッシュされる。実測では実機の HULK の identity が
+  // 106 字（上限 110）で、あと 5 字長い訳が返れば消えていた。訳文の長さは毎回揺れるので
+  // 上限すれすれの語は運任せになる。
+  //
+  // 読点で切って省略記号を添える。文の途中には違いないが、句点に次いで切れ目として
+  // 自然で、何も出ないよりは情報が残る。ただし半分未満しか残らないなら意味を成さない
+  // ので諦める（R-W16 の「文中で切らない」を緩める唯一の経路）
+  const comma = lastIndexOfAny(head, MID_SENTENCE_BREAK);
+  if (comma >= Math.floor(max / 2)) return head.slice(0, comma + 1) + '…';
+  return '';
 }
 
 /** 与えられた記号のうち、最も後ろに現れる位置。無ければ -1 */
