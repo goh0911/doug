@@ -535,24 +535,37 @@ describe('addGlossaryEntry - 上限拒否', () => {
     expect(ok).toBe(false);
   });
 
-  it('glossary 全体 2KB 超過時は false を返す', async () => {
-    const { addGlossaryEntry } = await loadStore();
-    // 既存の glossary を 2KB 近くまで埋める
-    const bigGlossary = {};
-    // 各エントリ約 100 bytes × 22 件 ≈ 2.2 KB
-    for (let i = 0; i < 22; i++) {
-      const key = `Term${String(i).padStart(3, '0')}aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`.slice(0, 40);
-      bigGlossary[key] = {
-        translated: 'テストテストテストテストテストテスト',
-        count: 0, lastSeenAt: 0, source: 'manual', approved: true,
+  /** 自動抽出が作るのと同じ形のエントリを n 件並べた用語集 */
+  function grownGlossary(n) {
+    const out = {};
+    for (let i = 0; i < n; i++) {
+      out[`TERM_${String(i).padStart(4, '0')}`] = {
+        translated: `テスト用語${i}`,
+        approved: false, count: 0, addedAt: 1_700_000_000_000, source: 'nano-extract',
       };
     }
-    _store['series:s001'] = {
-      meta: { name: 'Test' },
-      glossary: { ja: bigGlossary },
-    };
-    const ok = await addGlossaryEntry('s001', 'ja', 'NewTerm', '新語');
-    expect(ok).toBe(false);
+    return out;
+  }
+  const bytesOf = (v) => new TextEncoder().encode(JSON.stringify(v)).length;
+
+  // 上限 2 KB はエントリ約 113 バイトに対し約 18 語で埋まる。ところが実際に用語集を
+  // 膨らませる自動抽出（applyExtractionResult）には検査が無く、実測では 175 語・
+  // 約 20 KB まで育っていた。つまり上限は育つ経路には効かず、ユーザーが意図して
+  // 操作する経路（手動追加・候補の承認）だけを止めていた
+  it('自動抽出で育った規模（175 語・約 20 KB）でも手動追加できる', async () => {
+    const { addGlossaryEntry } = await loadStore();
+    const grown = grownGlossary(175);
+    expect(bytesOf(grown)).toBeGreaterThan(16 * 1024); // 旧上限 2 KB を大きく超えている
+    _store['series:s001'] = { meta: { name: 'Test' }, glossary: { ja: grown } };
+    expect(await addGlossaryEntry('s001', 'ja', 'NewTerm', '新語')).toBe(true);
+  });
+
+  it('上限を超える規模なら従来どおり false を返す（歯止めは残す）', async () => {
+    const { addGlossaryEntry } = await loadStore();
+    const huge = grownGlossary(700);
+    expect(bytesOf(huge)).toBeGreaterThan(64 * 1024);
+    _store['series:s001'] = { meta: { name: 'Test' }, glossary: { ja: huge } };
+    expect(await addGlossaryEntry('s001', 'ja', 'NewTerm', '新語')).toBe(false);
   });
 });
 

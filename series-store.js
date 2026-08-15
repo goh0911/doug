@@ -14,8 +14,16 @@ import { trimGlossDefs, GLOSSDEFS_SERIES_MAX_BYTES } from './utils/gloss-cache.j
 const WARN_THRESHOLD    = 6.5 * 1024 * 1024;  // 6.5 MB
 const ARCHIVE_THRESHOLD = 7.32 * 1024 * 1024; // 7.32 MB
 
-// glossary 全体の上限（1 シリーズあたり 2 KB）
-const GLOSSARY_SERIES_MAX_BYTES = 2 * 1024;
+// glossary 全体の上限（1 シリーズあたり 64 KB）。
+//
+// 以前は 2 KB だったが、これはエントリ約 113 バイトに対し**約 18 語**で埋まる値で、
+// しかも検査が入るのは addGlossaryEntry（手動追加と候補の承認）だけだった。実際に
+// 用語集を膨らませる自動抽出（applyExtractionResult）には検査が無いため、実測では
+// 175 語・約 20 KB まで育っており、その状態では手動追加も承認も必ず失敗していた。
+// 上限が、育つ経路には効かずユーザーが意図して操作する経路だけを止めていたことになる。
+// 実測 20 KB に対し十分な余裕を取りつつ、暴走時の歯止めとしては残す（storage 全体の
+// 退避閾値 ARCHIVE_THRESHOLD は 7.32 MB なので、この値なら全体を圧迫しない）
+const GLOSSARY_SERIES_MAX_BYTES = 64 * 1024;
 
 // 60 秒以内の同一シリーズ再翻訳は no-op（spam 防止）
 const NO_OP_INTERVAL_MS = 60 * 1000;
@@ -509,7 +517,7 @@ export async function addGlossaryEntry(seriesId, targetLang, original, translate
     const glossary = series.glossary ?? {};
     const langGlossary = { ...(glossary[targetLang] ?? {}) };
 
-    // 仮追加して 2KB チェック
+    // 仮追加して容量チェック（GLOSSARY_SERIES_MAX_BYTES）
     const provisional = {
       ...langGlossary,
       [sanitizedOrig]: {

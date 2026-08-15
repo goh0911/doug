@@ -389,6 +389,12 @@ function renderCandidateSection(container, series, seriesId, targetLang, nanoAva
     candidateList.className = 'nano-candidate-list';
     container.appendChild(candidateList);
 
+    // 承認が失敗したときに理由を出す枠。以前は承認ハンドラに else が無く、用語集が
+    // 上限に達していると押しても何も起きない（押下が無反応）状態だった
+    const candidateMsg = document.createElement('div');
+    candidateMsg.className = 'inline-msg';
+    container.appendChild(candidateMsg);
+
     pendingKeys.forEach(function(original) {
       const entry = glossaryLangMap[original];
       const isInconsistent = entry.inconsistent === true && Array.isArray(entry.variants);
@@ -430,6 +436,8 @@ function renderCandidateSection(container, series, seriesId, targetLang, nanoAva
         if (ok) {
           row.remove();
           _checkCandidateListEmpty(candidateList, container);
+        } else {
+          showInlineMsg(candidateMsg, '承認できませんでした（使用できない文字／100字超／用語集が上限を超過）', 'err', 0);
         }
       });
       row.appendChild(approveBtn);
@@ -725,7 +733,7 @@ async function renderDetail(seriesId) {
       renderGlossaryRows(glossaryRows, updatedEntries, seriesId, targetLang);
       showInlineMsg(glossaryMsg, '追加しました', 'ok', 3000);
     } else {
-      showInlineMsg(glossaryMsg, '追加できませんでした（使用できない文字／100字超／用語集が2KBを超過）', 'err', 0);
+      showInlineMsg(glossaryMsg, '追加できませんでした（使用できない文字／100字超／用語集が上限を超過）', 'err', 0);
     }
   });
 
