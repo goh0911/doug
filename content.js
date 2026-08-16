@@ -710,16 +710,35 @@
   const CAPTURE_MIME = 'image/jpeg';
   const CAPTURE_QUALITY = 0.92;
 
+  // 送信する画像の長辺の上限。**プロバイダで出し分ける。**
+  //
+  // クラウド API はトークン課金で、画素数にほぼ比例して費用が増える
+  // （Claude は概ね w×h/750 トークン）。一方 Ollama はローカル実行で課金が無く、
+  // 実測でもプリフィルは 0.1 秒のまま変わらなかった（qwen3.6:35b-a3b、
+  // 1024→2048 で画像トークン 1127→3239、プリフィルはどちらも 0.1 秒。
+  // 所要時間は出力トークン数で決まるデコード側が支配的）。
+  //
+  // 一方で 1024 への縮小は OCR 精度を実際に落としている。実測（2514×1920 の
+  // コミックページ・実在キーワード 8 語）: qwen3.6 は 1024px で 6/8、原寸で 8/8。
+  //
+  // ローカル側の上限 2048 はモデルの設定から決めた。Ollama のログに
+  // `image_max_pixels: 4194304`（＝2048×2048 相当）とあり、それ以上送っても
+  // モデル側で縮小されるだけで無駄になる。縦長のコミック 1 ページなら
+  // 長辺 2048 で約 2.9 Mpx となり、この上限に収まる。
+  const MAX_DIM_CLOUD = 1024;
+  const MAX_DIM_LOCAL = 2048;
+  // captureComic が設定から解決して入れる。既定は安全側（クラウド相当）に倒す
+  let captureMaxDim = MAX_DIM_CLOUD;
+
   async function captureSvgImage(info, preprocess = false) {
     const imageEl = info.element;
 
     // まずCanvasで既レンダリング済み画像をキャプチャ（URLトークン失効でも動作する）
     try {
       const bitmap = await createImageBitmap(imageEl);
-      const MAX_DIM = 1024;
       let w = bitmap.width, h = bitmap.height;
-      if (w > MAX_DIM || h > MAX_DIM) {
-        const scale = Math.min(MAX_DIM / w, MAX_DIM / h);
+      if (w > captureMaxDim || h > captureMaxDim) {
+        const scale = Math.min(captureMaxDim / w, captureMaxDim / h);
         w = Math.round(w * scale);
         h = Math.round(h * scale);
       }
@@ -759,10 +778,9 @@
       throw new Error('画像サイズが取得できません。画像のロードが完了していない可能性があります。');
     }
 
-    const MAX_DIM = 1024;
     let w = srcW, h = srcH;
-    if (w > MAX_DIM || h > MAX_DIM) {
-      const scale = Math.min(MAX_DIM / w, MAX_DIM / h);
+    if (w > captureMaxDim || h > captureMaxDim) {
+      const scale = Math.min(captureMaxDim / w, captureMaxDim / h);
       w = Math.round(w * scale);
       h = Math.round(h * scale);
     }
@@ -781,7 +799,10 @@
   }
 
   async function captureComic(info) {
-    const { imagePreprocess = true } = await chrome.storage.local.get({ imagePreprocess: true });
+    const { imagePreprocess = true, apiProvider = 'gemini' } =
+      await chrome.storage.local.get({ imagePreprocess: true, apiProvider: 'gemini' });
+    // Ollama はローカル実行で課金が無いので解像度を上げる。クラウドは従来どおり
+    captureMaxDim = apiProvider === 'ollama' ? MAX_DIM_LOCAL : MAX_DIM_CLOUD;
     if (info.type === 'svg') return { imageData: await captureSvgImage(info, imagePreprocess), capturedRect: null };
     try {
       return { imageData: captureRasterElement(info.element, imagePreprocess), capturedRect: null };
