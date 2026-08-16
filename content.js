@@ -2374,7 +2374,10 @@
     // 再翻訳ボタン（右下にホバーで表示）
     const reloadBtn = document.createElement('button');
     reloadBtn.className = 'mut-reload-btn';
-    reloadBtn.title = 'ページを再翻訳';
+    // キャッシュを使わないことを明示する。訳文が壊れて表示されたとき（モデルが
+    // 不正な応答を返すと、その結果がキャッシュされて開くたびに再現する）に、
+    // 利用者がここで復旧できると気づけるようにするため
+    reloadBtn.title = 'ページを再翻訳（キャッシュを使わず作り直す）';
     reloadBtn.insertAdjacentHTML('afterbegin',
       '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">' +
       '<path d="M23 4v6h-6"/>' +
