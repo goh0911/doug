@@ -20,7 +20,7 @@ import {
   getGlossDefs, putGlossDefs,
 } from './series-store.js';
 import { derivePathPrefix } from './utils/url-pattern.js';
-import { mergeGlossaries, mergeGlossDefs } from './utils/glossary-union.js';
+import { mergeGlossaries, mergeGlossDefs, findDef } from './utils/glossary-union.js';
 import { buildSeriesDetectionPrompt, parseSeriesDetectionResponse } from './utils/series-nano.js';
 import {
   WIKIPEDIA_ORIGIN, SOURCE_ID, buildSearchUrl, parseSearchResponse,
@@ -890,7 +890,9 @@ async function resolveGlossDefs({ seriesId, seriesName, terms, targetLang, langL
       const lookup = await buildDefsLookup(seriesId, targetLang);
       const sourcesKey = await glossSourcesKey({ primaryOnly: nanoOnly });
       const wanted = Array.isArray(terms) ? [...new Set(terms.filter((t) => typeof t === 'string' && t))] : [];
-      let missing = wanted.filter((t) => !isUsable(lookup[t], now, sourcesKey));
+      // 引き方は findDef に任せる。用語集は大小文字を畳むのに解説を完全一致で引くと、
+      // ROXXON に畳まれた語の解説が Roxxon に紐づいている場合に再利用できない
+      let missing = wanted.filter((t) => !isUsable(findDef(lookup, t), now, sourcesKey));
 
       // 1 リクエストあたりの fetch/LLM 呼び出し回数に上限を設ける（レビュー Important 1）。
       // 超過分は今回は処理しない（黙って落とさず記録だけ残す）
@@ -957,7 +959,7 @@ async function resolveGlossDefs({ seriesId, seriesName, terms, targetLang, langL
       // 表示可能なものだけ返す（失敗エントリは content.js に渡さない）
       const out = {};
       for (const term of wanted) {
-        const e = lookup[term];
+        const e = findDef(lookup, term);
         if (!e || e.failed === true) continue;
         // source を落とさない。落とすと content.js 側が出典ホスト名とラベルを
         // 直書きするしかなくなり、設計書 §3 の「ソースを 1 つ足すだけ」が成り立たない

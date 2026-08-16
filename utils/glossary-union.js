@@ -83,6 +83,31 @@ export function mergeGlossaries(sources, currentSeriesId) {
 }
 
 /**
+ * 解説を 1 語ぶん引く。大文字小文字の違いを吸収する。
+ *
+ * mergeGlossaries は ROXXON と Roxxon を 1 つに畳むのに、解説キャッシュのキーは
+ * 畳まれない。そのため用語集が ROXXON に畳まれた一方で解説が Roxxon に紐づいて
+ * いると、既にある解説を引けず作り直してしまう（Wikipedia 取得と API 課金の無駄）。
+ * 用語集の畳み方（foldKey）と引き方をここで揃える。
+ *
+ * 完全一致を優先し、無ければ大小文字違いを探す。候補が複数ある場合はキーの昇順で
+ * 決定的に選ぶ（読み込みごとに違う解説が出ないようにする）。
+ *
+ * @param {object} defs term -> エントリ
+ * @param {string} term
+ * @returns {object|undefined}
+ */
+export function findDef(defs, term) {
+  if (!defs || typeof defs !== 'object' || typeof term !== 'string') return undefined;
+  if (Object.prototype.hasOwnProperty.call(defs, term)) return defs[term];
+  const folded = foldKey(term);
+  for (const key of Object.keys(defs).sort()) {
+    if (foldKey(key) === folded) return defs[key];
+  }
+  return undefined;
+}
+
+/**
  * 他シリーズの解説キャッシュを 1 つに畳む。
  *
  * 失敗エントリも対象にする。あるシリーズで「Wikipedia に記事が無い」と分かった語を、

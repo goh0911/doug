@@ -1,6 +1,6 @@
 // tests/unit/glossary-union.test.js
 import { describe, it, expect } from 'vitest';
-import { mergeGlossaries, mergeGlossDefs } from '../../utils/glossary-union.js';
+import { mergeGlossaries, mergeGlossDefs, findDef } from '../../utils/glossary-union.js';
 
 const CUR = 'hulk';
 const term = (translated, addedAt = 1) => ({ translated, approved: false, addedAt });
@@ -134,5 +134,42 @@ describe('mergeGlossDefs', () => {
   it('不正な入力でも例外を投げない', () => {
     expect(mergeGlossDefs(undefined, CUR)).toEqual({});
     expect(mergeGlossDefs([{ seriesId: 'a', map: { X: null } }], CUR)).toEqual({});
+  });
+});
+
+// mergeGlossaries は大小文字を畳むのに mergeGlossDefs は完全一致でしか引かない、という
+// 食い違いがあった（Codex 指摘）。用語集が ROXXON に畳まれた一方で解説が Roxxon に
+// 紐づいていると再利用できず、既にある解説を作り直す（取得と課金の無駄）
+describe('findDef — 用語集の畳み方と解説の引き方を揃える', () => {
+  const e = (identity) => ({ identity, at: 1 });
+
+  it('完全一致はそのまま引ける', () => {
+    expect(findDef({ ROXXON: e('ロクソン') }, 'ROXXON').identity).toBe('ロクソン');
+  });
+
+  it('★大小文字だけ違う解説も引ける（用語集は畳まれるため）', () => {
+    expect(findDef({ Roxxon: e('ロクソン') }, 'ROXXON').identity).toBe('ロクソン');
+    expect(findDef({ ROXXON: e('ロクソン') }, 'roxxon').identity).toBe('ロクソン');
+  });
+
+  it('完全一致を大小文字違いより優先する', () => {
+    const defs = { Roxxon: e('小文字側'), ROXXON: e('完全一致側') };
+    expect(findDef(defs, 'ROXXON').identity).toBe('完全一致側');
+  });
+
+  it('候補が複数あるときも決定的に選ぶ', () => {
+    const a = findDef({ Roxxon: e('A'), roxxon: e('B') }, 'ROXXON');
+    const b = findDef({ roxxon: e('B'), Roxxon: e('A') }, 'ROXXON');
+    expect(a.identity).toBe(b.identity);
+  });
+
+  it('失敗エントリも引ける（別シリーズでの再試行抑制に必要）', () => {
+    expect(findDef({ Roxxon: { failed: true, at: 1 } }, 'ROXXON').failed).toBe(true);
+  });
+
+  it('無ければ undefined。不正な入力でも例外を投げない', () => {
+    expect(findDef({ A: e('あ') }, 'B')).toBeUndefined();
+    expect(findDef(null, 'A')).toBeUndefined();
+    expect(findDef({ A: e('あ') }, null)).toBeUndefined();
   });
 });
