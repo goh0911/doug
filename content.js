@@ -692,6 +692,24 @@
   // ============================================================
   // 画像キャプチャ
   // ============================================================
+
+  // 送信する画像の形式。**WebP にしないこと。**
+  //
+  // Ollama のローカルモデル（llama.cpp 経路）は WebP をデコードできず、翻訳が
+  // HTTP 400 で失敗する。実測（Ollama 0.32.13 / qwen3.6:35b-a3b、同一画像で 3/3）:
+  //   {"error":{"code":400,"message":"Failed to load image or audio file"}}
+  //   server.log: mtmd_helper_bitmap_init_from_buf: failed to decode buffer
+  //
+  // これまで表面化していなかったのは、別オリジンの画像だと canvas が汚染されて
+  // SecurityError で catch に落ち、image.js の URL フェッチ（JPEG 0.92）へ
+  // フォールバックしていたから。同一オリジンで画像を配信するサイトでは
+  // この経路が生き、Ollama では翻訳できない状態だった。
+  //
+  // JPEG は全プロバイダが受け付ける。品質は image.js の変換と揃える。
+  // WebP 0.65 より高品質なので OCR には有利で、base64 は約 2.5 倍になる。
+  const CAPTURE_MIME = 'image/jpeg';
+  const CAPTURE_QUALITY = 0.92;
+
   async function captureSvgImage(info, preprocess = false) {
     const imageEl = info.element;
 
@@ -713,7 +731,7 @@
       ctx.drawImage(bitmap, 0, 0, w, h);
       ctx.filter = 'none';
       bitmap.close();
-      return canvas.toDataURL('image/webp', 0.65);
+      return canvas.toDataURL(CAPTURE_MIME, CAPTURE_QUALITY);
     } catch {
       // SecurityError (CORS) 等 → URLフェッチにフォールバック
     }
@@ -755,7 +773,7 @@
       if (preprocess) ctx.filter = 'contrast(1.4) brightness(1.05)';
       ctx.drawImage(element, 0, 0, w, h);
       ctx.filter = 'none';
-      return canvas.toDataURL('image/webp', 0.65);
+      return canvas.toDataURL(CAPTURE_MIME, CAPTURE_QUALITY);
     } catch (err) {
       if (err.name === 'SecurityError') throw err;
       throw new Error(`画像の変換に失敗しました: ${err.message}`);
