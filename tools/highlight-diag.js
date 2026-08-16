@@ -140,25 +140,29 @@
         + '（chrome://extensions/ で Doug を再読み込みしてください）。自シリーズのみで測ります');
     }
 
-    // 解説キャッシュも横断参照になったので、他シリーズぶんを重ねて見る
-    // （自シリーズを優先、同点なら at が新しい方。background の buildDefsLookup と同じ規則）
-    {
+    // 解説キャッシュも横断参照になったので、他シリーズぶんを重ねて見る。
+    //
+    // **畳む規則を自前で書かない。** 以前ここに独自実装を置いた結果、本番が「成功を
+    // 先に見る」規則に変わった（f49a514）あとも自シリーズを無条件優先したままになり、
+    // 他シリーズに成功があるのに「失敗」と表示する状態だった（Codex 指摘）。
+    // 診断が本番と違う規則で動くと、直したはずの不具合を「まだある」と誤診する。
+    let findDef = (defs, t) => defs[t];
+    try {
+      const U = await import(chrome.runtime.getURL('utils/glossary-union.js'));
+      findDef = U.findDef;
       const all = await chrome.storage.local.get(null);
-      const merged = {};
-      for (const k of Object.keys(all).filter((x) => x.startsWith(SERIES_PREFIX)).sort()) {
-        const map = all[k]?.glossDefs?.[LANG] || {};
-        const isCurrent = k === key;
-        for (const [t, e] of Object.entries(map)) {
-          if (!e || typeof e.at !== 'number') continue;
-          const prev = merged[t];
-          if (!prev || (isCurrent && !prev._cur) || (!prev._cur && e.at > prev.at)) {
-            merged[t] = { ...e, _cur: isCurrent };
-          }
-        }
-      }
+      const merged = U.mergeGlossDefs(
+        Object.keys(all).filter((x) => x.startsWith(SERIES_PREFIX)).map((k) => ({
+          seriesId: k.slice(SERIES_PREFIX.length),
+          map: all[k]?.glossDefs?.[LANG] || {},
+        })),
+        key.slice(SERIES_PREFIX.length),
+      );
       const foreign = Object.keys(merged).length - Object.keys(d).length;
       if (foreign > 0) console.log(`解説キャッシュは横断で ${Object.keys(merged).length} 件（他シリーズから +${foreign}）`);
       d = merged;
+    } catch (e) {
+      console.warn('★utils/glossary-union.js を読めません。自シリーズのみで測ります:', e.message);
     }
 
     const terms = Object.keys(g).filter((k) => {
@@ -183,9 +187,10 @@
     const visible = terms.filter((k) => occursStandalone(pageText, g[k].translated));
 
     // --- 関門2: 解説の生成状態 ---
-    const okDefs = visible.filter((k) => d[k] && !d[k].failed);
-    const failedDefs = visible.filter((k) => d[k] && d[k].failed);
-    const noDefs = visible.filter((k) => !d[k]);
+    // 引き方も本番と揃える（findDef は大小文字の違いを吸収する）
+    const okDefs = visible.filter((k) => findDef(d, k) && !findDef(d, k).failed);
+    const failedDefs = visible.filter((k) => findDef(d, k)?.failed);
+    const noDefs = visible.filter((k) => !findDef(d, k));
 
     // --- 関門3: 実際に描画された下線 ---
     const spans = document.querySelectorAll('.doug-gloss-term');
