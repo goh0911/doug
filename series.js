@@ -218,7 +218,7 @@ function katakanaRunCount(s) {
   return m ? m.length : 0;
 }
 
-function sampleRecentPairs(pairs, limit) {
+function sampleRecentPairs(pairs, limit = 5) {
   if (!Array.isArray(pairs)) return [];
   if (pairs.length <= limit) return pairs;
   return [...pairs]

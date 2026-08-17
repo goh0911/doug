@@ -1799,20 +1799,27 @@
   function mergeTranslations(existing, incoming) {
     const result = existing.slice();
     const changedIndices = new Set();
+
     for (const newItem of incoming) {
       if (!newItem.bbox) { result.push(newItem); changedIndices.add(result.length - 1); continue; }
-      let bestIdx = -1, bestIou = 0;
+
+      let bestIdx = -1;
+      let bestIou = 0;
       for (let i = 0; i < result.length; i++) {
         if (!result[i].bbox) continue;
         const iou = calcIou(result[i].bbox, newItem.bbox);
         if (iou >= 0.3 && iou > bestIou) { bestIou = iou; bestIdx = i; }
       }
+
       if (bestIdx >= 0) {
-        result[bestIdx] = newItem; changedIndices.add(bestIdx);
+        result[bestIdx] = newItem;
+        changedIndices.add(bestIdx);
       } else {
-        result.push(newItem); changedIndices.add(result.length - 1);
+        result.push(newItem);
+        changedIndices.add(result.length - 1);
       }
     }
+
     return { translations: result, changedIndices };
   }
 
