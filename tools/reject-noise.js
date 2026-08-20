@@ -69,8 +69,11 @@ const REJECT = {
   ],
 
   // ── 大文字小文字だけ違う重複の残骸（3886701 以前に登録されたもの） ──
-  // 残す側: MARVEL / RICHARD / ROXXON / THUNDERBOLT ROSS / BREAKER OF WORLDS /
+  // 残す側: RICHARD / ROXXON / THUNDERBOLT ROSS / BREAKER OF WORLDS /
   //         UNITED STATES MILITARY
+  // ※ MARVEL は残さない。出版社名なので大文字版も credits で却下している
+  //   （当初この行に「残す側」として MARVEL を書いていたが、実際の挙動と
+  //     食い違っていた。両方却下が正しい）
   caseDupes: [
     'Richard', 'Roxxon', 'Thunderbolt Ross', 'Breaker of Worlds', 'United States military',
   ],
