@@ -2,7 +2,7 @@
 
 import { parseVisionResponse } from './utils/parse-utils.js';
 import { getSettings } from './settings.js';
-import { computeImageDataHash, getCachedTranslation, saveCachedTranslation } from './cache.js';
+import { computeImageDataHash, generateCacheKey, getCachedTranslation, saveCachedTranslation } from './cache.js';
 import { incrementApiStats } from './stats.js';
 import { getSeries } from './series-store.js';
 import { buildSeriesPromptSection } from './utils/prompt-builder.js';
@@ -16,6 +16,35 @@ const LANG_NAMES = {
 };
 
 const PROVIDER_LABELS = { gemini: 'Gemini', claude: 'Claude', openai: 'ChatGPT', ollama: 'Ollama' };
+
+/**
+ * 進行中の翻訳。キー（キャッシュと同じ粒度）→ 生の translations を解決する Promise。
+ *
+ * 先読みが次のページを翻訳している最中に利用者がそのページへ移動すると、キャッシュには
+ * まだ結果が無いため通常経路がもう一度翻訳していた（課金 2 倍・待ち時間もそのぶん）。
+ *
+ * 共有するのは **翻訳の生データだけ**。先読みは seriesId 無しで呼ばれるので層A も層B も
+ * 効いておらず、結果をそのまま横流しすると訳語置換の掛かっていない訳文が利用者に出る。
+ * 層B の適用は呼び出しごとに行う。
+ */
+const inFlightTranslations = new Map();
+
+/**
+ * 【一時】待ち合わせで防いだ二重翻訳の回数を数える。
+ *
+ * キャッシュの時刻だけでは、ある翻訳が先読み由来か通常経路かを区別できない。直した
+ * 効果を「体感が良くなった」以上の根拠で言えるようにするための計測で、確認が済んだら
+ * この関数ごと外す。失敗しても翻訳には影響させない。
+ */
+async function bumpPrefetchSaves() {
+  try {
+    const KEY = 'prefetchDedupStats';
+    const cur = (await chrome.storage.local.get(KEY))[KEY] || {};
+    await chrome.storage.local.set({
+      [KEY]: { saved: (cur.saved || 0) + 1, lastAt: Date.now() },
+    });
+  } catch { /* 測定用。失敗は無視する */ }
+}
 export const PROVIDER_KEY_MAP = { gemini: 'geminiApiKey', claude: 'claudeApiKey', openai: 'openaiApiKey', ollama: null };
 
 export async function handleImageTranslation(imageData, imageUrl, imageDims, options) {
@@ -82,6 +111,28 @@ export async function handleImageTranslation(imageData, imageUrl, imageDims, opt
     }
   }
 
+  // 同じ画像の翻訳が進行中なら、その結果を待って共有する（自分では API を叩かない）
+  const dedupKey = cacheKey
+    ? await generateCacheKey(cacheKey, settings.targetLang, provider, activeModel).catch(() => null)
+    : null;
+  if (dedupKey && !options?.forceRefresh) {
+    const running = inFlightTranslations.get(dedupKey);
+    if (running) {
+      // 失敗・空振りは共有しない。握りつぶして自分で引き直す（下へ落ちる）
+      const raw = await running.catch(() => null);
+      if (Array.isArray(raw) && raw.length > 0) {
+        const r = applyLayerB(raw);
+        await bumpPrefetchSaves();
+        return {
+          translations: r.translations,
+          fromCache: true,
+          glossaryHits: r.glossaryHits,
+          pairs: toPairs(raw),
+        };
+      }
+    }
+  }
+
   // Ollama 以外はAPIキーをチェック
   let apiKey;
   if (provider !== 'ollama') {
@@ -99,28 +150,41 @@ export async function handleImageTranslation(imageData, imageUrl, imageDims, opt
     // OpenAI は data URL をそのまま受け取るため parsed は Gemini/Claude のみ使用
     const prompt = buildTranslationPrompt(settings.targetLang, seriesSection);
 
-    if (provider === 'ollama') {
-      translations = await translateImageWithOllama(
-        settings.ollamaEndpoint || 'http://localhost:11434',
-        settings.ollamaModel || 'qwen3.6:35b-a3b',
-        imageData,
-        buildTranslationPrompt(settings.targetLang, seriesSection, { namedCoords: true }),
-        imageDims
-      );
-    } else if (provider === 'claude') {
-      translations = await translateImageWithClaude(apiKey, parsed, prompt, imageDims, settings.claudeModel);
-    } else if (provider === 'openai') {
-      translations = await translateImageWithOpenAI(apiKey, imageData, prompt, imageDims, settings.openaiModel);
-    } else {
-      translations = await translateImageWithGemini(apiKey, parsed, prompt, imageDims, settings.geminiModel);
-    }
+    // 保存まで含めて 1 本の Promise にする。待ち合わせ側がこれを await した時点で
+    // キャッシュにも入っている（先に resolve すると読み直しでレースになる）
+    const work = (async () => {
+      let out;
+      if (provider === 'ollama') {
+        out = await translateImageWithOllama(
+          settings.ollamaEndpoint || 'http://localhost:11434',
+          settings.ollamaModel || 'qwen3.6:35b-a3b',
+          imageData,
+          buildTranslationPrompt(settings.targetLang, seriesSection, { namedCoords: true }),
+          imageDims
+        );
+      } else if (provider === 'claude') {
+        out = await translateImageWithClaude(apiKey, parsed, prompt, imageDims, settings.claudeModel);
+      } else if (provider === 'openai') {
+        out = await translateImageWithOpenAI(apiKey, imageData, prompt, imageDims, settings.openaiModel);
+      } else {
+        out = await translateImageWithGemini(apiKey, parsed, prompt, imageDims, settings.geminiModel);
+      }
+      if (out.length > 0 && cacheKey) {
+        await saveCachedTranslation(cacheKey, settings.targetLang, out, provider, activeModel, {
+          viaPrefetch: options?.prefetch === true,
+        });
+      }
+      // 翻訳成功時のみカウント（キャッシュヒット・エラー時はカウントしない）
+      await incrementApiStats(provider);
+      return out;
+    })();
 
-    if (translations.length > 0 && cacheKey) {
-      await saveCachedTranslation(cacheKey, settings.targetLang, translations, provider, activeModel);
+    if (dedupKey) inFlightTranslations.set(dedupKey, work);
+    try {
+      translations = await work;
+    } finally {
+      if (dedupKey) inFlightTranslations.delete(dedupKey);
     }
-
-    // 翻訳成功時のみカウント（キャッシュヒット・エラー時はカウントしない）
-    await incrementApiStats(provider);
     const r = applyLayerB(translations);
     // Phase 4: 翻訳ペアを返す（original/translated の組、layer B 適用前の raw）
     return { translations: r.translations, glossaryHits: r.glossaryHits, pairs: toPairs(translations) };

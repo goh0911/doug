@@ -20,7 +20,11 @@ export async function computeImageDataHash(imageData) {
   return 'img-hash:' + Array.from(new Uint8Array(hash)).map(b => b.toString(16).padStart(2, '0')).join('');
 }
 
-async function generateCacheKey(imageUrl, targetLang, provider = '', model = '') {
+/**
+ * キャッシュキーを組み立てる。translate.js の同時実行の待ち合わせも同じキーで行う。
+ * 粒度がずれると「先読みと通常経路が同じ画像だと気づけない」ため export している。
+ */
+export async function generateCacheKey(imageUrl, targetLang, provider = '', model = '') {
   if (!imageUrl) throw new Error('imageUrl is required');
   // トークン等を除去したURLでハッシュ生成（先読みと通常翻訳でキャッシュを共有）
   const normalized = normalizeImageUrl(imageUrl);
@@ -55,9 +59,15 @@ export async function getCachedTranslation(imageUrl, targetLang, provider = '', 
   }
 }
 
-export async function saveCachedTranslation(imageUrl, targetLang, translations, provider = '', model = '') {
+/**
+ * @param {{ viaPrefetch?: boolean }} [meta] 【一時】どの経路が作ったキャッシュかを残す。
+ *   先読みの命中率を測るためだけの印で、読み出し側は見ていない。CACHE_VERSION は
+ *   上げない（フィールドが増えるだけなので既存のキャッシュを捨てる必要がない）
+ */
+export async function saveCachedTranslation(imageUrl, targetLang, translations, provider = '', model = '', meta = {}) {
   const cacheKey = await generateCacheKey(imageUrl, targetLang, provider, model);
   const cacheData = { translations, timestamp: Date.now(), version: CACHE_VERSION };
+  if (meta && meta.viaPrefetch === true) cacheData.viaPrefetch = true;
   const storage = isSessionOnlyUrl(imageUrl) ? chrome.storage.session : chrome.storage.local;
   try {
     await storage.set({ [cacheKey]: cacheData });

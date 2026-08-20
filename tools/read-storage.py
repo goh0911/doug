@@ -22,7 +22,7 @@ EOF
   - .ldb（確定済み）だけを読む。直近の書き込みは .log に残っていて反映されないことがある
   - Snappy と LevelDB の SST を自前で解いている（外部依存を足さないため）
 """
-import json, pathlib, struct, sys
+import datetime, json, pathlib, struct, sys
 
 # ---------- Snappy（raw format）の伸長 ----------
 def snappy_decompress(data):
@@ -210,3 +210,36 @@ for k in sorted(records):
     print(f"   URL           {pats}")
     print(f"   翻訳回数      {(s.get('stats') or {}).get('translationCount')} / 抽出実行 {(s.get('stats') or {}).get('extractionRuns')}")
     print()
+# ------------------------------------------------------------------
+# 先読みの効き具合
+# ------------------------------------------------------------------
+via, total = 0, 0
+for k, v in records.items():
+    if not k.startswith('cache'):
+        continue
+    try:
+        o = json.loads(v)
+    except Exception:
+        continue
+    if not isinstance(o, dict) or 'translations' not in o:
+        continue
+    total += 1
+    if o.get('viaPrefetch') is True:
+        via += 1
+
+if total:
+    print()
+    print('■ 先読みの効き具合')
+    print(f'   キャッシュ {total} 件 / うち先読みが作ったもの {via} 件'
+          f'{f"（{via * 100 // total}%）" if total else ""}')
+    print('   ※ viaPrefetch を付け始めた後に作られた分だけが数えられる。')
+    print('     それ以前のキャッシュは印を持たないので「先読みでない」側に入る')
+
+if 'prefetchDedupStats' in records:
+    try:
+        st = json.loads(records['prefetchDedupStats'])
+    except Exception:
+        st = {}
+    last = st.get('lastAt')
+    when = datetime.datetime.fromtimestamp(last / 1000).strftime('%m/%d %H:%M') if last else '-'
+    print(f'   待ち合わせで防いだ二重翻訳: {st.get("saved", 0)} 回（最終 {when}）')
