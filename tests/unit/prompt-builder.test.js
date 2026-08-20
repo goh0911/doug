@@ -32,19 +32,34 @@ describe('buildSeriesPromptSection - 用語集', () => {
     expect(section).not.toContain('シング');
   });
 
-  it('上位 30 件に cap する', () => {
+  it('上位 60 件に cap する', () => {
     const glossaryLangMap = {};
-    for (let i = 0; i < 50; i++) {
+    for (let i = 0; i < 80; i++) {
       glossaryLangMap[`term${i}`] = { translated: `訳${i}`, count: i, approved: true };
     }
     const section = buildSeriesPromptSection({ glossaryLangMap });
-    // count 降順上位30 = term49..term20。term19 以下は含まれない
-    expect(section).toContain('term49 → 訳49');
+    // count 降順上位60 = term79..term20。term19 以下は含まれない
+    expect(section).toContain('term79 → 訳79');
     expect(section).toContain('term20 → 訳20');
     expect(section).not.toContain('term19 → 訳19');
-    // 行番号は 30 まで
-    expect(section).toContain('30. ');
-    expect(section).not.toContain('31. ');
+    // 行番号は 60 まで
+    expect(section).toContain('60. ');
+    expect(section).not.toContain('61. ');
+  });
+
+  // count はどこでもインクリメントされておらず（series-store.js:525 で 0 に初期化される
+  // だけ）、実データでも count>0 の語は 0 件だった。つまり「count 降順で上位」は
+  // 同点ソート＝chrome.storage が返すキー順（辞書順）でしかない。
+  // 実機で承認 49 語のうち RED HULK / ROXXON / TONY STARK など 19 語が
+  // 頭文字だけを理由に落ちていた。人が手で承認したものが黙って落ちないようにする。
+  it('count が全語 0 でも、承認済み 49 語はすべて載る', () => {
+    const glossaryLangMap = {};
+    for (let i = 0; i < 49; i++) {
+      glossaryLangMap[`term${i}`] = { translated: `訳${i}`, count: 0, approved: true };
+    }
+    const section = buildSeriesPromptSection({ glossaryLangMap });
+    expect(section).toContain('49. ');
+    for (let i = 0; i < 49; i++) expect(section).toContain(`term${i} → 訳${i}`);
   });
 });
 
