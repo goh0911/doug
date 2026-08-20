@@ -187,7 +187,10 @@ function isTruncationOf(shorter, longer) {
 }
 
 export function mergeCandidates(glossaryLangMap, candidates, rejectedOriginals = []) {
-  const rejectedSet = new Set(rejectedOriginals);
+  // 却下記憶も大小文字を畳んで持つ。用語集との照合（existKey）は畳んでいるのに
+  // ここだけ完全一致だと、却下した語が別の綴りで戻ってくる。却下済みの語は用語集から
+  // 消えているので existKey にも当たらず、新規として登録されてしまう
+  const rejectedSet = new Set(rejectedOriginals.map((o) => String(o).toLowerCase()));
   // addedOriginals は解説の即時生成に使う。抽出で新しく入った語は「直前に読んだページに
   // 出ていた語」なので、ここで拾わないと解説の生成条件（いまページに出ている語）から
   // 外れ、そのページを再訪しない限り永久に生成されない
@@ -196,7 +199,7 @@ export function mergeCandidates(glossaryLangMap, candidates, rejectedOriginals =
 
   for (const c of candidates) {
     if (!c || !c.original || !c.translated) continue;
-    if (rejectedSet.has(c.original)) continue; // 却下記憶
+    if (rejectedSet.has(String(c.original).toLowerCase())) continue; // 却下記憶
 
     // 訳ゆれ検出（Phase 6-B）。既存の語が別の訳で再抽出されたら記録する。
     //

@@ -694,6 +694,29 @@ describe('mergeCandidates - 訳ゆれをマージ時に検出する', () => {
     );
     expect(glossaryLangMap.WALT.inconsistent).toBeUndefined();
   });
+
+  // 却下しても大小文字違いで復活する穴。実データ（Immortal Hulk 2018）には
+  // MARVEL と Marvel が両方登録されていた＝抽出は現に大小文字の変種を出す。
+  // 用語集との照合は畳んでいるのに却下記憶だけ完全一致では、却下した語が
+  // 別の綴りで戻ってくる（用語集から消えているので existKey にも当たらない）
+  it('却下記憶は大文字小文字を畳んで照合する', () => {
+    const { added, glossaryLangMap } = mergeCandidates(
+      {},
+      [{ original: 'marvel', translated: 'マーベル' }],
+      ['MARVEL']
+    );
+    expect(added).toBe(0);
+    expect(Object.keys(glossaryLangMap)).toEqual([]);
+  });
+
+  it('却下記憶に無い語は通る（畳み込みで巻き添えにしない）', () => {
+    const { added } = mergeCandidates(
+      {},
+      [{ original: 'MARVIN', translated: 'マーヴィン' }],
+      ['MARVEL']
+    );
+    expect(added).toBe(1);
+  });
 });
 
 // 30 字の上限だけでは台詞の断片が通り抜けていた（2026-08-05 実測）
