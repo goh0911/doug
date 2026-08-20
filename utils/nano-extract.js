@@ -187,10 +187,17 @@ function isTruncationOf(shorter, longer) {
 }
 
 export function mergeCandidates(glossaryLangMap, candidates, rejectedOriginals = []) {
-  // 却下記憶も大小文字を畳んで持つ。用語集との照合（existKey）は畳んでいるのに
-  // ここだけ完全一致だと、却下した語が別の綴りで戻ってくる。却下済みの語は用語集から
-  // 消えているので existKey にも当たらず、新規として登録されてしまう
-  const rejectedSet = new Set(rejectedOriginals.map((o) => String(o).toLowerCase()));
+  // 却下記憶は 2 段で持つ。
+  //
+  //   完全一致  … その語そのものを却下した記憶。用語集に残っていても無条件で落とす
+  //   畳み込み  … 別の綴りで戻ってくるのを防ぐための記憶。**新規登録だけ**を止める
+  //
+  // 畳み込みを無条件に効かせると、変種（Roxxon）を却下して正規形（ROXXON）を残す
+  // 掃除をしたときに、正規形まで却下済み扱いになって訳ゆれ検出が死ぬ（Codex 指摘）。
+  // 畳み込みが防ぎたいのは「用語集に無い語が別表記で入り直すこと」だけなので、
+  // 用語集に現に残っている語より後ろに置く。
+  const rejectedExact = new Set(rejectedOriginals);
+  const rejectedFolded = new Set(rejectedOriginals.map((o) => String(o).toLowerCase()));
   // addedOriginals は解説の即時生成に使う。抽出で新しく入った語は「直前に読んだページに
   // 出ていた語」なので、ここで拾わないと解説の生成条件（いまページに出ている語）から
   // 外れ、そのページを再訪しない限り永久に生成されない
@@ -199,7 +206,7 @@ export function mergeCandidates(glossaryLangMap, candidates, rejectedOriginals =
 
   for (const c of candidates) {
     if (!c || !c.original || !c.translated) continue;
-    if (rejectedSet.has(String(c.original).toLowerCase())) continue; // 却下記憶
+    if (rejectedExact.has(c.original)) continue; // 却下記憶（完全一致）
 
     // 訳ゆれ検出（Phase 6-B）。既存の語が別の訳で再抽出されたら記録する。
     //
@@ -228,6 +235,9 @@ export function mergeCandidates(glossaryLangMap, candidates, rejectedOriginals =
       }
       continue; // 既存（approved/pending）の translated 自体は触らない
     }
+
+    // 用語集に無く、大小文字違いで却下されている語は入れない（別表記での出戻り防止）
+    if (rejectedFolded.has(String(c.original).toLowerCase())) continue;
 
     // 途中で切れた表記との重複を避ける。長いほうを残す
     const truncated = Object.keys(next).find((k) => isTruncationOf(k, c.original));

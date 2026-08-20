@@ -34,11 +34,15 @@ globalThis.chrome = {
   },
 };
 
-const { handleImageTranslation } = await import('../../translate.js');
+const { handleImageTranslation, INFLIGHT_WAIT_TIMEOUT_MS } = await import('../../translate.js');
 const { invalidateSettingsCache } = await import('../../settings.js');
 
 const IMAGE = 'data:image/jpeg;base64,/9j/4AAQSkZJRg==';
 const URL_A = 'https://example.com/page-1.jpg';
+// ハングを再現するテスト専用。進行中エントリが残るので他のテストと URL を分ける
+// （分けないと後続が待ち合わせに入って実時間で待たされる。これ自体が「相手が
+//   返らないと後続を巻き込む」ことの証拠でもある）
+const URL_STUCK = 'https://example.com/page-stuck.jpg';
 const SERIES_ID = 'S1';
 
 /** Gemini が返す形。訳文に原語が残っており、層B の置換対象になる */
@@ -77,6 +81,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.useRealTimers();
   delete globalThis.fetch;
 });
 
@@ -125,6 +130,79 @@ describe('同じ画像の同時翻訳', () => {
       handleImageTranslation(IMAGE, 'https://example.com/page-2.jpg', { width: 1000, height: 1000 }, { prefetch: true }),
     ]);
     expect(globalThis.fetch.mock.calls.length).toBe(2);
+  });
+
+  // Codex 指摘。background.js:1025（解説側）は
+  //   if (glossInFlight.get(lockKey) === run) glossInFlight.delete(lockKey)
+  // と「自分より後に入った run を消さない」ようにしているのに、こちらは無条件 delete
+  // だった。再翻訳ボタン（forceRefresh）は待ち合わせを飛ばして同じキーに登録するため、
+  // 先に終わった通常翻訳がその登録を消してしまう。
+  it('再翻訳（forceRefresh）の登録を、先に終わった通常翻訳が消さない', async () => {
+    let call = 0;
+    globalThis.fetch = vi.fn(async () => {
+      const n = ++call;
+      if (n === 1) {
+        // 1 本目（通常）は速く失敗する。キャッシュに何も残らないのが要点
+        await new Promise((r) => setTimeout(r, 10));
+        return { ok: false, status: 500, text: async () => 'boom', json: async () => ({}) };
+      }
+      await new Promise((r) => setTimeout(r, 80));
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ candidates: [{ content: { parts: [{ text: GEMINI_TEXT }] } }] }),
+        text: async () => GEMINI_TEXT,
+      };
+    });
+
+    const failing = handleImageTranslation(IMAGE, URL_A, { width: 1000, height: 1000 }, { prefetch: true });
+    await new Promise((r) => setTimeout(r, 2));
+    const refresh = handleImageTranslation(IMAGE, URL_A, { width: 1000, height: 1000 }, { seriesId: SERIES_ID, forceRefresh: true });
+
+    await failing;                              // ここで 1 本目が finally に入る
+    await new Promise((r) => setTimeout(r, 5)); // 3 本目が来るのは 1 本目の後片付けより後
+
+    const late = await handleImageTranslation(IMAGE, URL_A, { width: 1000, height: 1000 }, { seriesId: SERIES_ID });
+    await refresh;
+
+    // 3 本目は再翻訳の完了を待つべき。待てないと自分で叩いて 3 回になる
+    expect(globalThis.fetch.mock.calls.length).toBe(2);
+    expect(late.translations).toHaveLength(1);
+  });
+
+  // Codex 指摘。翻訳の fetch にはタイムアウトが無く、解決も拒否もされない通信に当たると
+  // 待ち合わせ側が永久に戻れない。二重翻訳を防ぐために「相手を待つ」ようにした結果、
+  // 1 本のハングが後続を巻き込むようになった。待つのをやめる出口を用意する。
+  it('進行中の翻訳が返ってこなければ、待機を打ち切って自分で翻訳する', async () => {
+    vi.useFakeTimers();
+    let call = 0;
+    globalThis.fetch = vi.fn(async () => {
+      if (++call === 1) return new Promise(() => { /* 解決も拒否もしない */ });
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ candidates: [{ content: { parts: [{ text: GEMINI_TEXT }] } }] }),
+        text: async () => GEMINI_TEXT,
+      };
+    });
+
+    handleImageTranslation(IMAGE, URL_STUCK, { width: 1000, height: 1000 }, { prefetch: true });
+    await vi.advanceTimersByTimeAsync(1); // 1 本目を進行中にする
+
+    const waiter = handleImageTranslation(IMAGE, URL_STUCK, { width: 1000, height: 1000 }, { seriesId: SERIES_ID });
+    // 待機側が Promise.race のタイマーを登録するまで microtask を流す。
+    // 先に時計を進めても、まだ登録されていないタイマーは進まない
+    for (let i = 0; i < 5; i++) await vi.advanceTimersByTimeAsync(1);
+    await vi.advanceTimersByTimeAsync(INFLIGHT_WAIT_TIMEOUT_MS + 1);
+
+    const r = await waiter;
+    expect(globalThis.fetch.mock.calls.length).toBe(2);
+    expect(r.translations).toHaveLength(1);
+    expect(r.translations[0].translated).toBe('ロクソン に会え'); // 層B は効いたまま
+  });
+
+  it('待機の上限は 2 分', () => {
+    expect(INFLIGHT_WAIT_TIMEOUT_MS).toBe(120_000);
   });
 
   it('翻訳が終わったあとの呼び出しはキャッシュで返る（待ち合わせが居座らない）', async () => {

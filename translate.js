@@ -30,6 +30,24 @@ const PROVIDER_LABELS = { gemini: 'Gemini', claude: 'Claude', openai: 'ChatGPT',
 const inFlightTranslations = new Map();
 
 /**
+ * 進行中の翻訳を待ちきる上限。
+ *
+ * 翻訳の fetch にはタイムアウトが無く、解決も拒否もされない通信に当たると相手は
+ * 永久に返らない。二重翻訳を防ぐために「相手を待つ」ようにした以上、待つのをやめる
+ * 出口も要る（Codex 指摘）。ここで諦めた側は自分で翻訳するので、ハングした場合だけ
+ * 従来どおり二重に走る。
+ *
+ * 2 分にしたのは、正常な翻訳を切らないため。Ollama はローカルの大きいモデルだと
+ * 60 秒を超えることがあり、クラウドでもリトライ（最大 3 回・バックオフ込み）を
+ * 挟むと数十秒に達する。これは fetch そのもののタイムアウトではなく「相手が
+ * 生きているか」の見切りなので、長めに取ってよい。
+ */
+export const INFLIGHT_WAIT_TIMEOUT_MS = 120_000;
+
+/** 待ちきれなかったことを raw と区別するための印 */
+const WAIT_TIMED_OUT = Symbol('inflight-wait-timeout');
+
+/**
  * 【一時】待ち合わせで防いだ二重翻訳の回数を数える。
  *
  * キャッシュの時刻だけでは、ある翻訳が先読み由来か通常経路かを区別できない。直した
@@ -119,8 +137,18 @@ export async function handleImageTranslation(imageData, imageUrl, imageDims, opt
     const running = inFlightTranslations.get(dedupKey);
     if (running) {
       // 失敗・空振りは共有しない。握りつぶして自分で引き直す（下へ落ちる）
-      const raw = await running.catch(() => null);
-      if (Array.isArray(raw) && raw.length > 0) {
+      let timer = null;
+      const raw = await Promise.race([
+        running.catch(() => null),
+        new Promise((resolve) => {
+          timer = setTimeout(() => resolve(WAIT_TIMED_OUT), INFLIGHT_WAIT_TIMEOUT_MS);
+        }),
+      ]);
+      if (timer !== null) clearTimeout(timer);
+      if (raw === WAIT_TIMED_OUT) {
+        // 黙って引き直すと「二重翻訳が直っていない」と誤診する。理由を残す
+        console.warn('[Doug bg] 進行中の翻訳を待ちきれなかったため自分で引き直す');
+      } else if (Array.isArray(raw) && raw.length > 0) {
         const r = applyLayerB(raw);
         await bumpPrefetchSaves();
         return {
@@ -183,7 +211,10 @@ export async function handleImageTranslation(imageData, imageUrl, imageDims, opt
     try {
       translations = await work;
     } finally {
-      if (dedupKey) inFlightTranslations.delete(dedupKey);
+      // 自分より後に入った work を消さない（background.js の解説側と同じ規則）。
+      // forceRefresh は待ち合わせを飛ばして同じキーに登録するため、無条件に消すと
+      // 再翻訳の登録が消え、以降の要求が待ち合わせできなくなる（Codex 指摘）
+      if (dedupKey && inFlightTranslations.get(dedupKey) === work) inFlightTranslations.delete(dedupKey);
     }
     const r = applyLayerB(translations);
     // Phase 4: 翻訳ペアを返す（original/translated の組、layer B 適用前の raw）

@@ -717,6 +717,37 @@ describe('mergeCandidates - 訳ゆれをマージ時に検出する', () => {
     );
     expect(added).toBe(1);
   });
+
+  // Codex 指摘。畳み込みは「別表記の再登録を防ぐ」ためのもので、用語集に現に残って
+  // いる語まで却下済み扱いにするためではない。実運用では変種（Roxxon）を却下して
+  // 正規形（ROXXON）を残す掃除をしており、畳むと正規形の訳ゆれ検出まで死んでいた。
+  it('大小文字違いが却下されていても、用語集に残っている語は既存語として扱う', () => {
+    const { glossaryLangMap } = mergeCandidates(
+      { ROXXON: existing('ロクソン') },
+      [{ original: 'ROXXON', translated: 'ロクスン' }],
+      ['Roxxon']
+    );
+    expect(glossaryLangMap.ROXXON.inconsistent).toBe(true);
+    expect(glossaryLangMap.ROXXON.variants).toEqual(['ロクソン', 'ロクスン']);
+  });
+
+  it('完全一致の却下は用語集に残っていても優先する（従来どおり）', () => {
+    const { glossaryLangMap } = mergeCandidates(
+      { ROXXON: existing('ロクソン') },
+      [{ original: 'ROXXON', translated: 'ロクスン' }],
+      ['ROXXON']
+    );
+    expect(glossaryLangMap.ROXXON.inconsistent).toBeUndefined();
+  });
+
+  it('大小文字違いが却下されていて用語集にも無ければ、新規登録しない', () => {
+    const { added } = mergeCandidates(
+      {},
+      [{ original: 'ROXXON', translated: 'ロクソン' }],
+      ['Roxxon']
+    );
+    expect(added).toBe(0);
+  });
 });
 
 // 30 字の上限だけでは台詞の断片が通り抜けていた（2026-08-05 実測）
