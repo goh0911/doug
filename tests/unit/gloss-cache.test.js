@@ -1,7 +1,8 @@
 // tests/unit/gloss-cache.test.js
 import { describe, it, expect } from 'vitest';
 import {
-  GLOSSDEFS_SERIES_MAX_BYTES, FAILED_TTL_MS, isUsable, trimGlossDefs,
+  GLOSSDEFS_SERIES_MAX_BYTES, FAILED_TTL_MS, FAILED_MAX_TTL_MS,
+  isUsable, nextFailCount, trimGlossDefs,
 } from '../../utils/gloss-cache.js';
 
 const NOW = 1_800_000_000_000;
@@ -127,4 +128,77 @@ describe('trimGlossDefs', () => {
     expect(trimGlossDefs(null, 100)).toEqual({});
     expect(trimGlossDefs({ A: null }, 100)).toEqual({});
   });
+});
+
+// ------------------------------------------------------------------
+// A-6: 素材が存在しない語の再試行バックオフ
+// ------------------------------------------------------------------
+describe('isUsable — 失敗の再試行バックオフ', () => {
+  const KEY = '2:en-wikipedia';
+  const failedN = (failCount, at) => ({ failed: true, at, sources: KEY, failCount });
+
+  it('failCount を持たない旧エントリは従来どおり 24 時間', () => {
+    expect(isUsable({ failed: true, at: NOW - FAILED_TTL_MS - 1, sources: KEY }, NOW, KEY)).toBe(false);
+  });
+
+  it('1 回目の失敗は 24 時間で再試行する', () => {
+    expect(isUsable(failedN(1, NOW - FAILED_TTL_MS - 1), NOW, KEY)).toBe(false);
+  });
+
+  it('2 回目の失敗は 24 時間経っても再試行しない', () => {
+    expect(isUsable(failedN(2, NOW - FAILED_TTL_MS - 1), NOW, KEY)).toBe(true);
+  });
+
+  it('2 回目の失敗は 48 時間を超えたら再試行する', () => {
+    expect(isUsable(failedN(2, NOW - FAILED_TTL_MS * 2 - 1), NOW, KEY)).toBe(false);
+  });
+
+  it('失敗が続いても待機は 7 日で頭打ちになる', () => {
+    // 2^9 * 24h = 12 日ぶんに相当する failCount でも 7 日で再試行する
+    expect(isUsable(failedN(10, NOW - FAILED_MAX_TTL_MS - 1), NOW, KEY)).toBe(false);
+    expect(isUsable(failedN(10, NOW - FAILED_MAX_TTL_MS + 1000), NOW, KEY)).toBe(true);
+  });
+
+  it('ソース構成が変われば failCount によらず即座に再試行する', () => {
+    // 新しいソースを足した効果を、伸びた待機時間で潰さない
+    expect(isUsable(failedN(10, NOW - 1000), NOW, '2:en-wikipedia+comicvine')).toBe(false);
+  });
+
+  it('成功エントリは failCount を見ない', () => {
+    expect(isUsable({ ...ok(NOW - FAILED_MAX_TTL_MS * 10), sources: KEY, failCount: 10 }, NOW, KEY)).toBe(true);
+  });
+});
+
+describe('nextFailCount', () => {
+  it('初めての失敗は 1', () => {
+    expect(nextFailCount(undefined)).toBe(1);
+    expect(nextFailCount(null)).toBe(1);
+  });
+
+  it('失敗が続くと増える', () => {
+    expect(nextFailCount({ failed: true, at: NOW, failCount: 1 })).toBe(2);
+    expect(nextFailCount({ failed: true, at: NOW, failCount: 3 })).toBe(4);
+  });
+
+  it('failCount を持たない旧い失敗エントリは 2 として続きから数える', () => {
+    expect(nextFailCount({ failed: true, at: NOW })).toBe(2);
+  });
+
+  it('直前が成功なら 1 に戻る', () => {
+    // 一度でも引けた語は「素材が無い」わけではないので待機を伸ばさない
+    expect(nextFailCount(ok(NOW))).toBe(1);
+  });
+
+  it('エントリでない値は 1 を返す', () => {
+    expect(nextFailCount('x')).toBe(1);
+  });
+
+  it('failCount が壊れている失敗エントリは 2（直前が失敗である事実は動かない）', () => {
+    expect(nextFailCount({ failed: true, at: NOW, failCount: -5 })).toBe(2);
+    expect(nextFailCount({ failed: true, at: NOW, failCount: 'x' })).toBe(2);
+  });
+});
+
+describe('定数（バックオフ）', () => {
+  it('待機の上限は 7 日', () => expect(FAILED_MAX_TTL_MS).toBe(7 * 24 * 60 * 60 * 1000));
 });

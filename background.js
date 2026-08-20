@@ -30,7 +30,7 @@ import {
 import * as CV from './utils/comicvine-source.js';
 import { buildGlossPrompt, parseGlossResponse } from './utils/gloss-summary.js';
 import { sanitizePairForNano, parseCandidatesJson, buildExtractionPrompt } from './utils/nano-extract.js';
-import { isUsable } from './utils/gloss-cache.js';
+import { isUsable, nextFailCount } from './utils/gloss-cache.js';
 import { planGlossGeneration, seriesNameAttempts, acceptsNonExactTitle, retryAfterMs } from './utils/gloss-policy.js';
 import { createSemaphore } from './utils/semaphore.js';
 
@@ -930,9 +930,15 @@ async function resolveGlossDefs({ seriesId, seriesName, terms, targetLang, langL
             // 曖昧性解消が効かなくなる（TONY STARK を Immortal Hulk で引く等）
             const homeName = (homeNames && typeof homeNames[term] === 'string' && homeNames[term])
               ? homeNames[term] : seriesName;
+            // 失敗が続くほど再試行の間隔を伸ばす（A-6）。直前のエントリは missing の
+            // 判定と同じ引き方（findDef）で取るので、他シリーズで積んだ回数も引き継ぐ。
+            // SHOCK ROXX RADIO のような作中架空の語は素材が存在せず、24 時間ごとに
+            // 何度引いても結果が変わらない
+            const prevEntry = findDef(lookup, term);
             const entry = await buildGlossEntry(term, homeName, langLabel, nanoOnly, publisher, sourcesKey)
               .catch(() => ({ failed: true, at: now, sources: sourcesKey }));
             if (entry === null) return;
+            if (entry.failed === true) entry.failCount = nextFailCount(prevEntry);
             own[term] = entry;
             lookup[term] = entry;
             const stored = await putGlossDefs(seriesId, targetLang, own);

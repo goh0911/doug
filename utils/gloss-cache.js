@@ -7,6 +7,38 @@ export const GLOSSDEFS_SERIES_MAX_BYTES = 16 * 1024;
 /** 失敗エントリの再試行間隔。記事が加筆される可能性があるため恒久的に諦めない */
 export const FAILED_TTL_MS = 24 * 60 * 60 * 1000;
 
+/**
+ * 失敗が続いたときの再試行間隔の上限。
+ *
+ * 素材が原理的に存在しない語がある。SHOCK ROXX RADIO（作中架空のラジオ局）は
+ * Wikipedia にも Comic Vine にも記事が無く、24 時間ごとに何度引いても結果は同じ。
+ * 失敗が続くほど間隔を倍にして無駄な取得を減らすが、上限を置いて諦めきらない。
+ * 記事は後から書かれることがあるし、こちらの検証ゲートが緩むこともある。
+ */
+export const FAILED_MAX_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+
+/** 失敗が failCount 回続いた語を、次に引き直すまでの待機（24h → 48h → … → 7 日で頭打ち） */
+function failedTtlMs(failCount) {
+  const n = Number.isInteger(failCount) && failCount >= 1 ? failCount : 1;
+  return Math.min(FAILED_TTL_MS * 2 ** (n - 1), FAILED_MAX_TTL_MS);
+}
+
+/**
+ * 失敗エントリを書くときに載せる failCount を、直前のエントリから決める。
+ *
+ * 直前が成功なら 1 に戻す。一度でも引けた語は「素材が無い」わけではないので、
+ * 一時的な事情で失敗しただけの語の待機を伸ばしてはいけない。
+ *
+ * @param {object|undefined} prev 同じ語の直前のエントリ（無ければ undefined）
+ * @returns {number} 1 以上
+ */
+export function nextFailCount(prev) {
+  if (!prev || typeof prev !== 'object') return 1;
+  if (prev.failed !== true) return 1;
+  const n = prev.failCount;
+  return Number.isInteger(n) && n >= 1 ? n + 1 : 2;
+}
+
 /** UTF-8 バイト数（series-store.js の計測方法に合わせる） */
 function byteLength(value) {
   return new TextEncoder().encode(JSON.stringify(value)).length;
@@ -38,9 +70,11 @@ export function isUsable(entry, now, sourcesKey) {
 
   if (entry.failed === true) {
     // 失敗は「どの構成で引けなかったか」なので、ソースが増えたら引き直す。指紋を
-    // 持たない旧エントリも、いつの構成で失敗したか分からない以上は引き直す
+    // 持たない旧エントリも、いつの構成で失敗したか分からない以上は引き直す。
+    // この判定を待機時間より先に置くのが要点。ソースを足した効果を、失敗が続いて
+    // 伸びた待機（最大 7 日）で握り潰さないため
     if (typeof sourcesKey === 'string' && entry.sources !== sourcesKey) return false;
-    return now - entry.at < FAILED_TTL_MS;
+    return now - entry.at < failedTtlMs(entry.failCount);
   }
 
   // 成功は「どの作り方で作ったか」だけを見る。ソース構成まで一致を求めると、
