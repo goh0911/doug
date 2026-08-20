@@ -1,6 +1,6 @@
 # Doug
 
-コミック画像をリアルタイムで翻訳し、吹き出し上にオーバーレイ表示するChrome拡張機能（v2.2.6）。
+コミック画像をリアルタイムで翻訳し、吹き出し上にオーバーレイ表示するChrome拡張機能（v2.2.7）。
 
 > **v2 Phase 1（実験的）**: シリーズ検出パイプライン（Regex ベース）を搭載。ツールバーにデバッグ表示のみ。詳細: [`docs/plans/2026-05-27-doug-v2-phase1-detection-design.md`](docs/plans/2026-05-27-doug-v2-phase1-detection-design.md)
 
