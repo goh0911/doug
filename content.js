@@ -369,7 +369,19 @@
     seriesIndicator.className = 'mut-series-indicator mut-series-indicator--none';
     seriesIndicator.textContent = '📚 検出不可';
 
-    toolbar.append(translateBtn, autoBtn, toggleBtn, clearBtn, modeBtn, debugBtn, seriesIndicator);
+    // 折りたたみトグル。ツールバーは右下固定なので、トグルを右端に置くと
+    // 開閉してもトグル自体の位置が動かない
+    const collapseBtn = document.createElement('button');
+    collapseBtn.id = 'mut-btn-collapse';
+    collapseBtn.className = 'mut-btn mut-btn-collapse';
+    // 初期は展開（翻訳が出た時点で setToolbarCollapsed(true) が畳む）
+    collapseBtn.title = 'ツールバーを閉じる';
+    collapseBtn.setAttribute('aria-expanded', 'true');
+    collapseBtn.insertAdjacentHTML('afterbegin',
+      '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">' +
+      '<polyline points="15 18 9 12 15 6"/></svg>');
+
+    toolbar.append(translateBtn, autoBtn, toggleBtn, clearBtn, modeBtn, debugBtn, seriesIndicator, collapseBtn);
     const parent = getUIParent();
     parent.appendChild(toolbar);
 
@@ -392,6 +404,9 @@
     document.getElementById('mut-btn-toggle').addEventListener('click', toggleOverlays);
     document.getElementById('mut-btn-clear').addEventListener('click', clearOverlays);
     document.getElementById('mut-btn-mode').addEventListener('click', toggleRetranslateMode);
+    document.getElementById('mut-btn-collapse').addEventListener('click', () => {
+      setToolbarCollapsed(!toolbar.classList.contains('mut-collapsed'));
+    });
     document.getElementById('mut-btn-debug').addEventListener('click', () => {
       if (_debugCanvas) {
         clearPanelDebug();
@@ -404,6 +419,18 @@
 
     // v2 Phase 1: ツールバー出現直後にシリーズ検出を実行（fire-and-forget）
     detectAndUpdateSeriesIndicator();
+  }
+
+  // 翻訳を表示している間だけ畳む。読んでいる最中はボタン列が邪魔になるが、
+  // 翻訳していない状態では操作できないと困るので開いておく
+  function setToolbarCollapsed(collapsed) {
+    if (!toolbar) return;
+    toolbar.classList.toggle('mut-collapsed', collapsed);
+    const btn = document.getElementById('mut-btn-collapse');
+    if (btn) {
+      btn.setAttribute('aria-expanded', String(!collapsed));
+      btn.title = collapsed ? 'ツールバーを開く' : 'ツールバーを閉じる';
+    }
   }
 
   function makeDraggable(el) {
@@ -974,6 +1001,8 @@
         ? `${response.translations.length}件のテキストを表示しました（キャッシュ）`
         : `${response.translations.length}件のテキストを翻訳しました`;
       showNotification(message, 'success');
+      // 翻訳が出たらツールバーを畳む（失敗時は操作できるよう開いたまま）
+      setToolbarCollapsed(true);
       // 翻訳・表示完了後に先読みをトリガー（現在ページのAPI処理が終わってから）
       triggerPrefetch(imageUrl);
     } catch (err) {
@@ -2637,6 +2666,9 @@
     if (clearBtn) clearBtn.style.display = 'none';
     if (modeBtn) modeBtn.style.display = 'none';
     if (debugBtn) debugBtn.style.display = 'none';
+    // 翻訳が無くなった＝ページ遷移やクリア。次の操作に備えて開く。
+    // ただし自動翻訳中は数百ms後にまた翻訳が出るので、開閉のちらつきを避けて畳んだままにする
+    if (!autoTranslate) setToolbarCollapsed(false);
   }
 
   function toggleAutoTranslate() {

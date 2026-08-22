@@ -18,6 +18,33 @@
   user-select: none;
 }
 
+/* 折りたたみ時はトグルと自動翻訳だけ残す（.mut-btn 以外の要素も対象にするため子孫全部を見る）。
+   自動翻訳は ON/OFF が見えないと動いているか分からないので畳んでも出したままにする */
+#mut-toolbar.mut-collapsed {
+  gap: 0;
+  padding: 4px;
+}
+#mut-toolbar.mut-collapsed > *:not(#mut-btn-collapse):not(#mut-btn-auto) {
+  display: none;
+}
+/* 畳んでいる間はアイコンだけにする（「自動」のテキストノードは要素でないので font-size で消す。
+   SVG は width/height 属性を持つので影響を受けない） */
+#mut-toolbar.mut-collapsed #mut-btn-auto {
+  padding: 8px;
+  gap: 0;
+  font-size: 0;
+}
+/* .mut-btn と同順・同詳細度だと後勝ちで padding が戻るので、2 クラスで上書きする */
+.mut-btn.mut-btn-collapse {
+  padding: 8px;
+}
+.mut-btn-collapse svg {
+  transition: transform 0.2s;
+}
+#mut-toolbar:not(.mut-collapsed) .mut-btn-collapse svg {
+  transform: rotate(180deg);
+}
+
 .mut-btn {
   display: inline-flex;
   align-items: center;
@@ -201,8 +228,8 @@
 #mut-notification {
   position: fixed;
   top: 20px;
-  left: 50%;
-  transform: translateX(-50%) translateY(-80px);
+  right: 20px;
+  transform: translateY(-80px);
   padding: 10px 20px;
   border-radius: 8px;
   font-size: 13px;
@@ -214,7 +241,7 @@
   white-space: nowrap;
 }
 #mut-notification.mut-notif-show {
-  transform: translateX(-50%) translateY(0);
+  transform: translateY(0);
 }
 .mut-notif-info {
   background: #1e1e2e;
