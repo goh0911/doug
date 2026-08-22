@@ -29,7 +29,13 @@ const GLOSSARY_SERIES_MAX_BYTES = 64 * 1024;
 const NO_OP_INTERVAL_MS = 60 * 1000;
 
 // Phase 4: Nano 用語集自動抽出 定数
-const EXTRACTION_THRESHOLD = 20;          // recentPairs がこの件数に達したら抽出予約
+// recentPairs がこの件数に達したら抽出予約。1 翻訳＝10 件（PAIRS_PER_TRANSLATION）なので
+// 20 のままだと 2 ページ読むまで抽出が走らず、新出語はその語が出たページでは用語集に無い
+// ＝下線も解説も出ない（実機で確認: DAREDEVIL の addedAt が初出ページより後だった）。
+// 10 なら 1 ページで予約され、抽出後の積み残しは必ず 10 件未満なので
+// 「積み残し + 今回の 10 件」は EXTRACTION_PAIRS_PER_RUN（20）に収まる。
+// FIFO で古い側から評価しても、いま読んでいるページのペアが必ず同じ回に入る
+const EXTRACTION_THRESHOLD = 10;
 const RECENT_PAIRS_MAX = 50;              // recentPairs バッファ上限
 const PAIRS_PER_TRANSLATION = 10;         // 1 翻訳あたり recentPairs に記録する件数
 // 抽出後の積み残しがこの件数以上なら続きを流す。1 回に評価するペア数

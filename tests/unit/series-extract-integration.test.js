@@ -67,7 +67,7 @@ function makeSeries(overrides = {}) {
 // ペア追加 → extractionDue フロー
 // ============================================================
 describe('ペア追加 → extractionDue フロー', () => {
-  it('recentPairs が 20 件に達すると extractionDue が true になる', async () => {
+  it('積み上がった recentPairs が閾値に達すると extractionDue が true になる', async () => {
     const { recordSeriesTranslation, getSeries } = await loadStore();
     const old = Date.now() - 61_000;
     _store['series:flow001'] = makeSeries({
@@ -89,6 +89,34 @@ describe('ペア追加 → extractionDue フロー', () => {
 
     const series = await getSeries('flow001');
     expect(series.recentPairs.length).toBeGreaterThanOrEqual(20);
+    expect(series.extractionDue).toBe(true);
+  });
+
+  // 新出語がそのページで用語集に入るための条件。閾値が 20 だと 1 ページ目の翻訳では
+  // 抽出が予約されず、その語の下線は次のページ以降まで出ない（実機で確認: DAREDEVIL が
+  // 初出ページでは下線にならず、後から addedAt が付いた）
+  it('1 回の翻訳（10 ペア）で extractionDue が true になる', async () => {
+    const { recordSeriesTranslation, getSeries } = await loadStore();
+    const old = Date.now() - 61_000;
+    _store['series:flow010'] = makeSeries({
+      recentPairs: [],
+      stats: { translationCount: 1, lastTranslatedAt: old },
+    });
+
+    // 1 ページぶん（吹き出し 12 個）。PAIRS_PER_TRANSLATION=10 で 10 件が記録される
+    await recordSeriesTranslation({
+      seriesId: 'flow010',
+      name: 'Test',
+      detectionSource: 'regex',
+      url: 'https://example.com/comic/1',
+      pairs: Array.from({ length: 12 }, (_, i) => ({
+        original: 'DAREDEVIL line ' + i,
+        translated: 'デアデビルのセリフ' + i,
+      })),
+    });
+
+    const series = await getSeries('flow010');
+    expect(series.recentPairs.length).toBe(10);
     expect(series.extractionDue).toBe(true);
   });
 
