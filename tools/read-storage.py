@@ -210,6 +210,32 @@ for k in sorted(records):
     print(f"   URL           {pats}")
     print(f"   翻訳回数      {(s.get('stats') or {}).get('translationCount')} / 抽出実行 {(s.get('stats') or {}).get('extractionRuns')}")
     print()
+
+# ------------------------------------------------------------------
+# 【一時措置】評価候補（tmp/eval-collector ブランチ限定・master には無い）
+# ------------------------------------------------------------------
+if 'evalCandidates' in records:
+    try:
+        cands = json.loads(records['evalCandidates'])
+    except Exception as e:
+        print(f'evalCandidates: JSON 解析失敗 {e}')
+        cands = {}
+    print(f'■ 評価候補 {len(cands)} 件（新しい順）')
+    rows = sorted(cands.items(), key=lambda kv: str((kv[1] or {}).get('at', '')), reverse=True)
+    for img, v in rows:
+        v = v or {}
+        print(f"   {v.get('at','?')}  {'/'.join(v.get('reasons') or [])}")
+        print(f"      検出 {v.get('count')} 件 / 異なり比 {v.get('distinctRatio')} / 未訳率 {v.get('untranslatedRatio')}"
+              f"{'  （キャッシュ経由）' if v.get('fromCache') else ''}")
+        print(f"      page  {v.get('pageUrl')}")
+        print(f"      image {img}")
+    print()
+else:
+    print('評価候補（evalCandidates）はまだ 1 件も無い。')
+    print('  → 収集コードが載っていないのか、条件に合うページに当たっていないのかは')
+    print('     これだけでは区別できない。拡張の ID（unpacked 版か）と、')
+    print('     background.js に evalCandidates があるかを併せて確認すること')
+
 # ------------------------------------------------------------------
 # 先読みの効き具合
 # ------------------------------------------------------------------

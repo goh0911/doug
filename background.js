@@ -10,6 +10,8 @@ import {
   saveToWhitelist, removeFromWhitelist, injectToTab,
 } from './whitelist.js';
 import { handleImageTranslation, callTextOnlyProvider } from './translate.js';
+// 【一時措置】評価候補の記録（tmp/eval-collector 限定・master には載せない）
+import { computeEvalSignals, isEvalCandidate, trimCandidates } from './utils/eval-signals.js';
 import { handlePreloadQueue, resumePreloadQueue } from './preload.js';
 import { detectSeries, computeSeriesId } from './utils/series-detect.js';
 import {
@@ -120,12 +122,50 @@ chrome.runtime.onConnect.addListener((port) => {
         message.imageDims,
         { forceRefresh: !!message.forceRefresh, seriesId: message.seriesId ?? null }
       );
+      // 【一時措置】難しかったページを評価用に貯める。翻訳の応答は待たせない
+      void recordEvalCandidate(result, message.imageUrl, sender.tab?.url);
       if (!portDisconnected) port.postMessage(result);
     } catch (err) {
       if (!portDisconnected) port.postMessage({ error: err.message });
     }
   });
 });
+
+// ============================================================
+// 【一時措置】評価候補の記録（tmp/eval-collector 限定・master には載せない）
+// ============================================================
+// 難しい評価ページを人手で探すのが困難なため、読書中に自動で候補を貯める。
+// 判定は utils/eval-signals.js（記録するだけなので誤検知しても失うものは無い）。
+// 先読み経路（preload.js）は Port を通らないため、その分は後で閲覧したときに
+// fromCache: true として拾う。二重登録は imageUrl をキーにして防ぐ。
+const EVAL_CANDIDATES_KEY = 'evalCandidates';
+const EVAL_CANDIDATES_MAX = 50;
+
+async function recordEvalCandidate(result, imageUrl, pageUrl) {
+  try {
+    // プロバイダ側のエラーはページの難しさではないので対象外
+    if (!result || result.error || !imageUrl) return;
+
+    const signals = computeEvalSignals(result.translations);
+    const verdict = isEvalCandidate(signals);
+    if (!verdict.hit) return;
+
+    const stored = await chrome.storage.local.get(EVAL_CANDIDATES_KEY);
+    const map = stored[EVAL_CANDIDATES_KEY] || {};
+    map[imageUrl] = {
+      pageUrl: pageUrl || null,
+      reasons: verdict.reasons,
+      count: signals.count,
+      distinctRatio: Number(signals.distinctRatio.toFixed(3)),
+      untranslatedRatio: Number(signals.untranslatedRatio.toFixed(3)),
+      fromCache: !!result.fromCache,
+      at: new Date().toISOString(),
+    };
+    await chrome.storage.local.set({ [EVAL_CANDIDATES_KEY]: trimCandidates(map, EVAL_CANDIDATES_MAX) });
+  } catch {
+    // 記録の失敗は翻訳に影響させない
+  }
+}
 
 // ============================================================
 // Phase 5: Nano シリーズ検出 fallback
