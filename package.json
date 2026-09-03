@@ -1,6 +1,6 @@
 {
   "name": "doug",
-  "version": "2.2.8",
+  "version": "2.2.9",
   "private": true,
   "description": "Dougはコミックをリアルタイムで翻訳表示する拡張機能です",
   "type": "module",
