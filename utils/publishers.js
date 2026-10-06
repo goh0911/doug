@@ -10,7 +10,9 @@
  * Vertigo / Wildstorm は DC のインプリント）
  */
 export const PUBLISHERS = [
-  { key: 'marvel', hosts: ['marvel.com'], pattern: /marvel|timely|atlas\s+comics/i },
+  // marvel.webtoon.com は 2026-11-16 公開の後継アプリ（Marvel Unlimited は 12/7 終了）。
+  // webtoon.com 全体は他社作品も載るので、マーベル専用のサブドメインだけを足す
+  { key: 'marvel', hosts: ['marvel.com', 'marvel.webtoon.com'], pattern: /marvel|timely|atlas\s+comics/i },
   { key: 'dc', hosts: ['dc.com', 'dcuniverseinfinite.com', 'readdc.com'], pattern: /\bDC\b|vertigo|wildstorm/i },
   { key: 'archie', hosts: ['archiecomics.com'], pattern: /archie\s+comics/i },
   { key: 'image', hosts: ['imagecomics.com'], pattern: /image\s+comics/i },

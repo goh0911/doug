@@ -39,4 +39,21 @@ test.describe('翻訳機能', () => {
     await expect(page.locator('#mut-overlay-container')).toBeAttached({ timeout: 60_000 });
     await expect(page.locator('.mut-overlay').first()).toBeAttached({ timeout: 60_000 });
   });
+
+  // 後継の Marvel Comics powered by WEBTOON（2026-11-16 公開）。
+  // リーダーの DOM が未確認なので、URL は環境変数で受け取り、未指定ならスキップする。
+  // 実機で tools/reader-diag.js を流して構造が分かるまで、待機セレクタは推測しない。
+  // 例: MARVEL_WEBTOON_URL='https://marvel.webtoon.com/...' npm run test:e2e
+  const MARVEL_WEBTOON_URL = process.env.MARVEL_WEBTOON_URL;
+  test('Marvel Comics (WEBTOON): 翻訳ボタン押下で日本語オーバーレイが表示される', async ({ page }) => {
+    test.skip(!MARVEL_WEBTOON_URL, 'MARVEL_WEBTOON_URL が未設定（リーダーの URL は公開後に確定）');
+    await page.goto(MARVEL_WEBTOON_URL, { waitUntil: 'load' });
+
+    const translateBtn = page.locator(TRANSLATE_BTN);
+    await expect(translateBtn).toBeVisible({ timeout: 30_000 });
+    await translateBtn.click();
+
+    await expect(page.locator('#mut-overlay-container')).toBeAttached({ timeout: 60_000 });
+    await expect(page.locator('.mut-overlay').first()).toBeAttached({ timeout: 60_000 });
+  });
 });

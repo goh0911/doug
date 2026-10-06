@@ -347,6 +347,14 @@ describe('expectedPublisher', () => {
     expect(expectedPublisher('marvel.com.example.net')).toBeNull();
     expect(expectedPublisher('notmarvel.com')).toBeNull();
   });
+
+  // Marvel Unlimited の後継（WEBTOON 運営）。webtoon.com 本体は他社作品も扱うので対象外
+  it('marvel.webtoon.com は marvel、webtoon.com 本体は判定しない', () => {
+    expect(expectedPublisher('marvel.webtoon.com')).toBe('marvel');
+    expect(expectedPublisher('www.webtoons.com')).toBeNull();
+    expect(expectedPublisher('webtoon.com')).toBeNull();
+    expect(expectedPublisher('marvel.webtoon.com.example.net')).toBeNull();
+  });
 });
 
 describe('publisherConflicts', () => {
