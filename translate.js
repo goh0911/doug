@@ -6,6 +6,9 @@ import { computeImageDataHash, generateCacheKey, getCachedTranslation, saveCache
 import { incrementApiStats } from './stats.js';
 import { getSeries } from './series-store.js';
 import { buildSeriesPromptSection } from './utils/prompt-builder.js';
+import { geminiThinkingConfig } from './utils/gemini-params.js';
+import { openaiReasoningParams, OPENAI_TRANSLATION_RESPONSE_FORMAT } from './utils/openai-params.js';
+import { claudeThinkingParams, extractClaudeText } from './utils/claude-params.js';
 import { applyGlossaryPostProcess } from './utils/glossary-substitute.js';
 import { maskSecrets } from './utils/mask-secrets.js';
 import { supportsThinking, buildOllamaChatBody, pickOllamaResponseText, ollamaParseResponse } from './utils/ollama.js';
@@ -71,9 +74,9 @@ export async function handleImageTranslation(imageData, imageUrl, imageDims, opt
 
   // キャッシュキー用：現在有効なモデル名を取得
   const MODEL_KEY_MAP = {
-    gemini: settings.geminiModel || 'gemini-3.6-flash',
-    claude: settings.claudeModel || 'claude-sonnet-5',
-    openai: settings.openaiModel || 'gpt-5.6-sol',
+    gemini: settings.geminiModel || 'gemini-4-hydrogen',
+    claude: settings.claudeModel || 'claude-haiku-5-5',
+    openai: settings.openaiModel || 'gpt-6.1-terra',
     ollama: settings.ollamaModel || 'qwen3.6:35b-a3b',
   };
   const activeModel = MODEL_KEY_MAP[provider] || '';
@@ -193,7 +196,15 @@ export async function handleImageTranslation(imageData, imageUrl, imageDims, opt
       } else if (provider === 'claude') {
         out = await translateImageWithClaude(apiKey, parsed, prompt, imageDims, settings.claudeModel);
       } else if (provider === 'openai') {
-        out = await translateImageWithOpenAI(apiKey, imageData, prompt, imageDims, settings.openaiModel);
+        // box 配列の軸順はモデル任せになる（gpt-6.1-terra は [y,x,x,y] で返した）ので、
+        // 名前付き座標 + json_schema で受ける
+        out = await translateImageWithOpenAI(
+          apiKey,
+          imageData,
+          buildTranslationPrompt(settings.targetLang, seriesSection, { namedCoords: true }),
+          imageDims,
+          settings.openaiModel
+        );
       } else {
         out = await translateImageWithGemini(apiKey, parsed, prompt, imageDims, settings.geminiModel);
       }
@@ -241,7 +252,7 @@ function parseImageDataUrl(imageDataUrl) {
 // namedCoords: 座標を box 配列ではなく x_min/y_min/x_max/y_max で返させる。
 // 位置引数の配列だと軸の順序がモデルの流儀に左右される（実測: qwen3-vl は
 // [x_min, y_min, x_max, y_max] を返し、Doug の [y_min, x_min, ...] と食い違っていた）。
-// Ollama だけこちらを使う（OLLAMA_TRANSLATION_SCHEMA と対）
+// Ollama（OLLAMA_TRANSLATION_SCHEMA と対）と OpenAI（OPENAI_TRANSLATION_RESPONSE_FORMAT と対）がこちらを使う
 function buildTranslationPrompt(targetLang, seriesSection = '', { namedCoords = false } = {}) {
   const langName = LANG_NAMES[targetLang] || targetLang;
   const sectionBlock = seriesSection ? `\n\n${seriesSection}` : '';
@@ -274,6 +285,8 @@ ${coordSpec}
 - コミックの文脈に合った自然な${langName}にする
 - 効果音は表現豊かに翻訳（例: "BOOM" → "ドーン"）
 - 感情・トーンを維持する
+- 一人称と語尾は、吹き出しの尻尾が指す人物を絵から見分け、その人物の性別・年齢・性格に合わせる
+- 話者が見分けられないときは一人称を省くか「私」にする（日本語では一人称を省いても自然）
 - 翻訳文は簡潔に。吹き出しに収まる長さにする
 
 座標ルール:
@@ -341,7 +354,7 @@ function extractSafeErrorMessage(errBody) {
 async function translateImageWithGemini(apiKey, parsed, prompt, imageDims, model) {
   const { mimeType, base64Data } = parsed;
 
-  const modelName = model || 'gemini-3.6-flash';
+  const modelName = model || 'gemini-4-hydrogen';
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(modelName)}:generateContent`;
   const body = JSON.stringify({
     contents: [{
@@ -353,6 +366,8 @@ async function translateImageWithGemini(apiKey, parsed, prompt, imageDims, model
     generationConfig: {
       temperature: 0.2,
       maxOutputTokens: 32000,
+      // Gemini 4 系は thinking 既定が high で約 2 倍遅い。low に落とす（根拠は utils/gemini-params.js）
+      ...geminiThinkingConfig(modelName),
     },
   });
 
@@ -387,8 +402,9 @@ async function translateImageWithClaude(apiKey, parsed, prompt, imageDims, model
 
   const url = 'https://api.anthropic.com/v1/messages';
   const body = JSON.stringify({
-    model: model || 'claude-sonnet-5',
+    model: model || 'claude-haiku-5-5',
     max_tokens: 32000,
+    ...claudeThinkingParams(model || 'claude-haiku-5-5'),
     messages: [{
       role: 'user',
       content: [
@@ -427,7 +443,8 @@ async function translateImageWithClaude(apiKey, parsed, prompt, imageDims, model
   }
 
   const data = await res.json();
-  const content = data.content?.[0]?.text;
+  // thinking ブロックが先頭に来ることがあるので content[0] 固定では読まない
+  const content = extractClaudeText(data.content);
   if (!content) throw new Error('Claude APIから応答がありません');
 
   return parseAndLogResults('Claude', content, imageDims);
@@ -439,11 +456,14 @@ async function translateImageWithClaude(apiKey, parsed, prompt, imageDims, model
 async function translateImageWithOpenAI(apiKey, imageDataUrl, prompt, imageDims, model) {
 
   const url = 'https://api.openai.com/v1/chat/completions';
+  const modelName = model || 'gpt-6.1-terra';
   const body = JSON.stringify({
-    model: model || 'gpt-5.6-sol',
+    model: modelName,
     // GPT-5 系（推論モデル）は max_tokens を 400 で拒否する。Chat Completions では
     // max_completion_tokens が正（Claude の /v1/messages は max_tokens のままなので注意）
     max_completion_tokens: 32000,
+    ...openaiReasoningParams(modelName),
+    response_format: OPENAI_TRANSLATION_RESPONSE_FORMAT,
     messages: [{
       role: 'user',
       content: [
@@ -584,7 +604,7 @@ export async function callTextOnlyProvider(prompt) {
     }
 
     if (provider === 'gemini') {
-      const model = settings.geminiModel || 'gemini-3.6-flash';
+      const model = settings.geminiModel || 'gemini-4-hydrogen';
       const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`;
       const res = await fetchWithRetry(url, {
         method: 'POST',
@@ -594,7 +614,7 @@ export async function callTextOnlyProvider(prompt) {
           // 解説は identity 110 字 + powers 150 字の日本語 JSON で、本文だけで 512 をほぼ使い切る。
           // 加えて Flash 系は thinking が既定 medium で、その分もこの上限と出力課金に乗る。
           // 512 のままだと finishReason: MAX_TOKENS で candidates ごと欠けて解説が出ない
-          generationConfig: { temperature: 0, maxOutputTokens: 4096 },
+          generationConfig: { temperature: 0, maxOutputTokens: 4096, ...geminiThinkingConfig(model) },
         }),
         signal: controller.signal,
       }, 'Gemini');
@@ -616,29 +636,32 @@ export async function callTextOnlyProvider(prompt) {
           'anthropic-dangerous-direct-browser-access': 'true',
         },
         body: JSON.stringify({
-          model: settings.claudeModel || 'claude-sonnet-5',
-          // Claude は extended thinking がオプトインなので推論分は乗らないが、
-          // 日本語 260 字の JSON を返すには 512 では余裕が無い（Gemini/OpenAI と同じ理由）
+          model: settings.claudeModel || 'claude-haiku-5-5',
+          // 5.x 系は thinking が既定で走るので claudeThinkingParams で抑える（抑えられない旧モデルは
+          // 推論分が乗りうる）。日本語 260 字の JSON を返すには 512 では余裕が無い（Gemini/OpenAI と同じ理由）
           max_tokens: 4096,
+          ...claudeThinkingParams(settings.claudeModel || 'claude-haiku-5-5'),
           messages: [{ role: 'user', content: [{ type: 'text', text: prompt }] }],
         }),
         signal: controller.signal,
       }, 'Claude');
       if (!res.ok) return null;
       const data = await res.json();
-      return data.content?.[0]?.text || null;
+      return extractClaudeText(data.content) || null;
     }
 
     if (provider === 'openai') {
+      const openaiModel = settings.openaiModel || 'gpt-6.1-terra';
       const res = await fetchWithRetry('https://api.openai.com/v1/chat/completions', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
         body: JSON.stringify({
-          model: settings.openaiModel || 'gpt-5.6-sol',
+          model: openaiModel,
           // translateImageWithOpenAI と同じく max_completion_tokens（max_tokens ではない）。
           // GPT-5 系は推論トークンもこの上限に数えるため、512 だと推論だけで使い切って
           // content が空文字で返る（finish_reason: 'length'）。解説 JSON 用に余裕を持たせる
           max_completion_tokens: 4096,
+          ...openaiReasoningParams(openaiModel),
           messages: [{ role: 'user', content: prompt }],
         }),
         signal: controller.signal,

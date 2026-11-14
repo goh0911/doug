@@ -151,9 +151,9 @@ async function processPreloadItem(url, settings) {
     // キャッシュ済みならスキップ（進捗は進める）
     const preloadProvider = settings.apiProvider || 'gemini';
     const preloadModelMap = {
-      gemini: settings.geminiModel || 'gemini-3.6-flash',
-      claude: settings.claudeModel || 'claude-sonnet-5',
-      openai: settings.openaiModel || 'gpt-5.6-sol',
+      gemini: settings.geminiModel || 'gemini-4-hydrogen',
+      claude: settings.claudeModel || 'claude-haiku-5-5',
+      openai: settings.openaiModel || 'gpt-6.1-terra',
       ollama: settings.ollamaModel || 'qwen3.6:35b-a3b',
     };
     const existing = await getCachedTranslation(url, settings.targetLang, preloadProvider, preloadModelMap[preloadProvider] || '');

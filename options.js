@@ -243,9 +243,9 @@ document.addEventListener('DOMContentLoaded', async () => {
     geminiApiKey: '',
     claudeApiKey: '',
     openaiApiKey: '',
-    geminiModel: 'gemini-3.6-flash',
-    claudeModel: 'claude-sonnet-5',
-    openaiModel: 'gpt-5.6-sol',
+    geminiModel: 'gemini-4-hydrogen',
+    claudeModel: 'claude-haiku-5-5',
+    openaiModel: 'gpt-6.1-terra',
     ollamaModel: 'qwen3.6:35b-a3b',
     ollamaEndpoint: 'http://localhost:11434',
     prefetch: false,
@@ -262,6 +262,8 @@ document.addEventListener('DOMContentLoaded', async () => {
   $('geminiModel').value = settings.geminiModel;
   $('claudeModel').value = settings.claudeModel;
   $('openaiModel').value = settings.openaiModel;
+  // 選択肢から外れた旧モデル名（gpt-5.6-* など）が保存されていると select が空表示になるので既定に寄せる
+  if ($('openaiModel').value !== settings.openaiModel) $('openaiModel').value = 'gpt-6.1-terra';
   $('ollamaModel').value = settings.ollamaModel;
   $('ollamaEndpoint').value = settings.ollamaEndpoint;
   $('prefetch').checked = settings.prefetch;

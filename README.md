@@ -55,8 +55,8 @@ AIビジョンAPIを使って英語テキストを検出・翻訳します。ユ
 | プロバイダー | 翻訳モデル（選択可・太字が既定） |
 |---|---|
 | **Gemini** | **gemini-3.6-flash** / gemini-3.8-flash / gemini-3.7-flash / gemini-3.5-flash-lite |
-| **Claude** | claude-opus-4-8 / **claude-sonnet-5** / claude-haiku-4-5 |
-| **ChatGPT** | **gpt-5.6-sol** / gpt-5.6-terra / gpt-5.6-luna |
+| **Claude** | **claude-haiku-5-5** / claude-sonnet-5-5 / claude-opus-5-5 / claude-sonnet-5 / claude-opus-4-8 / claude-haiku-4-5 |
+| **ChatGPT** | **gpt-6.1-terra** / gpt-6.1-sol |
 | **Ollama** | **qwen3.6:35b-a3b** / qwen3-vl:8b / qwen3-vl:4b / gemma4 系（ローカル実行） |
 
 > gemini-3.8-flash / gemini-3.7-flash とも、公表されている改善はコーディング／エージェント系です。Doug が使う OCR・座標検出のベンチマークは示されておらず、こちらでも実ページでの比較をしていないため、既定は 3.6 のままにしています。3.8 の料金は 2026-12-31 までの導入価格が 3.6 と同額（$0.75 / $3.75）で、2027-01-01 から倍額（$1.50 / $7.50）になります。設定で切り替えると翻訳キャッシュが分離されるので、同じページで見比べられます。

@@ -16,6 +16,11 @@ export function cleanTranslatedText(text) {
   return s;
 }
 
+// x_min/y_min/x_max/y_max がすべて数値なら名前付き座標とみなす
+function hasNamedCoords(r) {
+  return ['x_min', 'y_min', 'x_max', 'y_max'].every(k => typeof r[k] === 'number');
+}
+
 /**
  * Gemini/Claude/OpenAI Vision API レスポンスを bbox 配列にパース
  * background.js の parseVisionResponse と同一ロジック
@@ -59,10 +64,19 @@ export function parseVisionResponse(geminiResponse, imageDims) {
 
   try {
     return results
-      .filter(r => r.translated && (r.box || r.bbox))
+      .filter(r => r.translated && (hasNamedCoords(r) || r.box || r.bbox))
       .map(r => {
         let top, left, width, height;
-        if (r.box && Array.isArray(r.box)) {
+        if (hasNamedCoords(r)) {
+          // 名前付き座標（OpenAI の json_schema 経路）。位置引数の box は軸の順序がモデルの流儀に
+          // 左右される（gpt-6.1-terra は [y_min,x_min,x_max,y_max] で返した）が、名前なら曖昧さが無い
+          const x1 = Math.min(r.x_min, r.x_max), x2 = Math.max(r.x_min, r.x_max);
+          const y1 = Math.min(r.y_min, r.y_max), y2 = Math.max(r.y_min, r.y_max);
+          left = (x1 / 1000) * 100;
+          top = (y1 / 1000) * 100;
+          width = ((x2 - x1) / 1000) * 100;
+          height = ((y2 - y1) / 1000) * 100;
+        } else if (r.box && Array.isArray(r.box)) {
           // [[y, x, Y, X]] のように1段ネストしている場合を展開
           const box = (r.box.length === 1 && Array.isArray(r.box[0])) ? r.box[0] : r.box;
           if (box.length === 4) {
