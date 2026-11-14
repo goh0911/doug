@@ -78,7 +78,8 @@ export function buildSeriesPromptSection({ seriesName, glossaryLangMap, toneStyl
   }
   if (toneInstruction) lines.push(`【訳文の口調】${toneInstruction}`);
   if (exampleList.length > 0) {
-    lines.push('【翻訳例】以下の対訳と同じ口調・言い回しで訳してください:');
+    // 「同じ口調で」と指示すると、例文の話者の一人称・語尾が他の人物にも移る
+    lines.push('【翻訳例】以下の対訳の語彙・言い回しを参考にしてください（一人称・語尾は話者ごとに合わせる）:');
     exampleList.forEach((e, i) => lines.push(`${i + 1}. ${e.original} → ${e.translated}`));
   }
   return lines.join('\n');
