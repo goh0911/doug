@@ -1,0 +1,3 @@
+[install]
+# 公開後 7 日未満のバージョンを拒否する（サプライチェーン対策 / CLAUDE.md §2.p）
+minimumReleaseAge = 604800
